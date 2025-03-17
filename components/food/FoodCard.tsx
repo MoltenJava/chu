@@ -1,23 +1,32 @@
-import React, { useState, memo, useCallback } from 'react';
-import { StyleSheet, View, Text, Image, Dimensions, Platform, Modal, TouchableOpacity, Pressable } from 'react-native';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-  interpolate,
-  runOnJS,
-  useAnimatedGestureHandler,
-  withTiming,
-  useDerivedValue,
-} from 'react-native-reanimated';
-import { PanGestureHandler } from 'react-native-gesture-handler';
-import { Ionicons } from '@expo/vector-icons';
+import React, { useState, memo, useCallback, useEffect, useRef } from 'react';
+import { StyleSheet, View, Text, Image, Dimensions, Platform, Modal, TouchableOpacity, Pressable, ViewStyle } from 'react-native';
+import { PanGestureHandler, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { FoodItem, SwipeDirection } from '../../types/food';
+import * as Haptics from 'expo-haptics';
+import { PLACEHOLDER_IMAGE, handleImageError } from '../../utils/imageUtils';
+import Animated, { 
+  useSharedValue, 
+  useAnimatedStyle, 
+  useAnimatedGestureHandler, 
+  withSpring, 
+  withTiming, 
+  runOnJS,
+  interpolate,
+  Extrapolate,
+  useAnimatedReaction
+} from 'react-native-reanimated';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const CARD_WIDTH = SCREEN_WIDTH * 0.92;
-const CARD_HEIGHT = SCREEN_HEIGHT * 0.65;
+const CARD_HEIGHT = SCREEN_HEIGHT * 0.68;
+const IMAGE_HEIGHT = CARD_HEIGHT * 0.82;
 const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.25;
+
+type GestureContext = {
+  startX: number;
+  startY: number;
+};
 
 interface FoodCardProps {
   food: FoodItem;
@@ -29,146 +38,230 @@ interface FoodCardProps {
 const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, index }) => {
   const [detailsVisible, setDetailsVisible] = useState(false);
   const [isSwiping, setIsSwiping] = useState(false);
+  const [showLikeIndicator, setShowLikeIndicator] = useState(false);
+  const [showNopeIndicator, setShowNopeIndicator] = useState(false);
+  const [likeOpacity, setLikeOpacity] = useState(0);
+  const [nopeOpacity, setNopeOpacity] = useState(0);
   
-  // Shared values for animations
+  const isMountedRef = useRef(true);
+  
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
-  const scale = useSharedValue(index === 0 ? 1 : 0.98 - (index * 0.02));
+  const cardOpacity = useSharedValue(1);
+  const cardScale = useSharedValue(1);
   
-  // Derived value for rotation to optimize performance
-  const rotation = useDerivedValue(() => {
-    return interpolate(
-      translateX.value,
-      [-SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 2],
-      [-8, 0, 8]
-    );
-  });
+  const socialProofData = useRef({
+    isTrending: food.id.charCodeAt(0) % 3 === 0,
+    orderCount: Math.floor(Math.random() * 200) + 10,
+    isLimitedTime: food.id.charCodeAt(0) % 5 === 0,
+    availableUntil: food.id.charCodeAt(0) % 5 === 0 ? `${Math.floor(Math.random() * 3) + 6}PM` : null
+  }).current;
 
-  // Gesture handler
-  const gestureHandler = useAnimatedGestureHandler({
-    onStart: (_, ctx: any) => {
-      ctx.startX = translateX.value;
-      ctx.startY = translateY.value;
-      runOnJS(setIsSwiping)(true);
+  useAnimatedReaction(
+    () => {
+      return {
+        x: translateX.value,
+        isSwiping: isSwiping
+      };
     },
-    onActive: (event, ctx) => {
-      translateX.value = ctx.startX + event.translationX;
-      translateY.value = ctx.startY + event.translationY * 0.4; // Reduced vertical movement
-    },
-    onEnd: (event) => {
-      const direction = event.translationX > SWIPE_THRESHOLD
-        ? 'right'
-        : event.translationX < -SWIPE_THRESHOLD
-          ? 'left'
-          : 'none';
-
-      if (direction !== 'none') {
-        // Swipe away animation - faster and smoother
-        translateX.value = withTiming(
-          direction === 'right' ? SCREEN_WIDTH * 1.2 : -SCREEN_WIDTH * 1.2,
-          { duration: 250 },
-          () => runOnJS(onSwipe)(food, direction)
-        );
-        translateY.value = withTiming(
-          direction === 'right' ? 40 : -40,
-          { duration: 250 }
-        );
+    (current, previous) => {
+      if (current.isSwiping) {
+        const rightOpacity = Math.min(Math.max(current.x / SWIPE_THRESHOLD, 0), 1);
+        const leftOpacity = Math.min(Math.max(-current.x / SWIPE_THRESHOLD, 0), 1);
+        
+        if (rightOpacity > 0) {
+          runOnJS(setShowLikeIndicator)(true);
+        } else {
+          runOnJS(setShowLikeIndicator)(false);
+        }
+        
+        if (leftOpacity > 0) {
+          runOnJS(setShowNopeIndicator)(true);
+        } else {
+          runOnJS(setShowNopeIndicator)(false);
+        }
+        
+        runOnJS(setLikeOpacity)(rightOpacity);
+        runOnJS(setNopeOpacity)(leftOpacity);
       } else {
-        // Return to center animation - snappier spring
-        translateX.value = withSpring(0, {
-          damping: 20,
-          stiffness: 300,
-          mass: 0.8
-        });
-        translateY.value = withSpring(0, {
-          damping: 20,
-          stiffness: 300,
-          mass: 0.8
-        });
+        runOnJS(setShowLikeIndicator)(false);
+        runOnJS(setShowNopeIndicator)(false);
+        runOnJS(setLikeOpacity)(0);
+        runOnJS(setNopeOpacity)(0);
       }
-      runOnJS(setIsSwiping)(false);
     },
-  });
+    [isSwiping]
+  );
 
-  // Animated styles
-  const cardStyle = useAnimatedStyle(() => {
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  const toggleDetails = useCallback(() => {
+    if (isMountedRef.current) {
+      setDetailsVisible(prev => !prev);
+    }
+  }, []);
+
+  const closeDetails = useCallback(() => {
+    if (isMountedRef.current) {
+      setDetailsVisible(false);
+    }
+  }, []);
+
+  const handleSwipeComplete = useCallback((foodItem: FoodItem, direction: SwipeDirection) => {
+    if (!isMountedRef.current) return;
+    
+    try {
+      if (!foodItem || !foodItem.id) {
+        console.warn("Invalid food item in handleSwipeComplete");
+        return;
+      }
+      
+      const safeFood = {...foodItem};
+      
+      setTimeout(() => {
+        if (isMountedRef.current) {
+          onSwipe(safeFood, direction);
+        }
+      }, 0);
+    } catch (error) {
+      console.error("Error in handleSwipeComplete:", error);
+    }
+  }, [onSwipe]);
+
+  const animatedCardStyle = useAnimatedStyle(() => {
     return {
       transform: [
         { translateX: translateX.value },
         { translateY: translateY.value },
-        { rotate: `${rotation.value}deg` },
-        { scale: scale.value }
+        { scale: cardScale.value },
+        { 
+          rotate: `${interpolate(
+            translateX.value,
+            [-SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 2],
+            [-8, 0, 8],
+            Extrapolate.CLAMP
+          )}deg` 
+        }
       ],
-      zIndex: 1000 - index,
+      opacity: cardOpacity.value,
+      zIndex: isFirst ? 1 : 0,
     };
-  }, []);
-
-  const likeStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(
-      translateX.value,
-      [0, SWIPE_THRESHOLD * 0.6],
-      [0, 1],
-      { extrapolateRight: 'clamp' }
-    );
-    return { opacity };
   });
 
-  const nopeStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(
-      translateX.value,
-      [-SWIPE_THRESHOLD * 0.6, 0],
-      [1, 0],
-      { extrapolateLeft: 'clamp' }
-    );
-    return { opacity };
+  const gestureHandler = useAnimatedGestureHandler({
+    onStart: (_, ctx: GestureContext) => {
+      ctx.startX = translateX.value;
+      ctx.startY = translateY.value;
+    },
+    onActive: (event, ctx) => {
+      if (!isFirst) return;
+      
+      translateX.value = ctx.startX + event.translationX;
+      translateY.value = ctx.startY + event.translationY * 0.3;
+      
+      if (Math.abs(event.translationX) > 10 || Math.abs(event.translationY) > 10) {
+        runOnJS(setIsSwiping)(true);
+      }
+    },
+    onEnd: (event) => {
+      if (!isFirst) return;
+      
+      let direction: SwipeDirection = 'none';
+      
+      if (event.translationX > SWIPE_THRESHOLD) {
+        direction = 'right';
+      } else if (event.translationX < -SWIPE_THRESHOLD) {
+        direction = 'left';
+      }
+      
+      if (direction !== 'none') {
+        translateX.value = withTiming(
+          direction === 'right' ? SCREEN_WIDTH * 1.2 : -SCREEN_WIDTH * 1.2,
+          { duration: 250 },
+          () => {
+            runOnJS(handleSwipeComplete)(food, direction);
+          }
+        );
+        
+        translateY.value = withTiming(
+          direction === 'right' ? 30 : -30,
+          { duration: 250 }
+        );
+      } else {
+        translateX.value = withSpring(0, { damping: 15 });
+        translateY.value = withSpring(0, { damping: 15 });
+      }
+      
+      runOnJS(setIsSwiping)(false);
+    },
   });
-
-  const toggleDetails = useCallback(() => {
-    if (!isSwiping) {
-      setDetailsVisible(true);
-    }
-  }, [isSwiping]);
-
-  const closeDetails = useCallback(() => {
-    setDetailsVisible(false);
-  }, []);
 
   return (
     <>
-      <PanGestureHandler onGestureEvent={gestureHandler} enabled={isFirst}>
-        <Animated.View style={[
-          styles.card, 
-          cardStyle,
-          { 
-            top: index * 4, // Reduced stacking offset
-            opacity: index > 2 ? 0 : 1 - (index * 0.06) // Reduced opacity difference
-          }
-        ]}>
-          <Pressable onPress={toggleDetails} disabled={isSwiping}>
-            <View style={styles.cardContent}>
-              <Image 
-                source={{ uri: food.imageUrl }} 
-                style={styles.image}
-                resizeMode="cover"
-              />
-              
-              <View style={styles.miniGradientOverlay} />
-              
-              <View style={styles.overlay}>
-                <Animated.View style={[styles.likeContainer, likeStyle]}>
-                  <Text style={styles.likeText}>LIKE</Text>
-                </Animated.View>
-                <Animated.View style={[styles.nopeContainer, nopeStyle]}>
-                  <Text style={styles.nopeText}>NOPE</Text>
-                </Animated.View>
-              </View>
+      <PanGestureHandler enabled={isFirst} onGestureEvent={gestureHandler}>
+        <Animated.View style={[styles.card, animatedCardStyle]}>
+          <View style={styles.imageContainer}>
+            <Image
+              source={{ uri: food.imageUrl }}
+              style={styles.image}
+              resizeMode="cover"
+              defaultSource={PLACEHOLDER_IMAGE}
+              onError={(e) => handleImageError(food.imageUrl, e.nativeEvent.error)}
+            />
 
-              <View style={styles.infoBar}>
-                <Text style={styles.foodName}>{food.name}</Text>
-                <Text style={styles.restaurantName}>{food.restaurant}</Text>
-              </View>
+            <View style={styles.socialProofContainer}>
+              {socialProofData.isTrending && (
+                <View style={styles.trendingBadge}>
+                  <MaterialIcons name="trending-up" size={14} color="#fff" />
+                  <Text style={styles.trendingText}>Trending</Text>
+                </View>
+              )}
+              
+              {socialProofData.orderCount > 50 && (
+                <View style={styles.ordersBadge}>
+                  <Text style={styles.ordersText}>{socialProofData.orderCount}+ ordered today</Text>
+                </View>
+              )}
+
+              {socialProofData.isLimitedTime && socialProofData.availableUntil && (
+                <View style={styles.limitedTimeBadge}>
+                  <MaterialCommunityIcons name="clock-outline" size={14} color="#fff" />
+                  <Text style={styles.limitedTimeText}>Until {socialProofData.availableUntil}</Text>
+                </View>
+              )}
             </View>
-          </Pressable>
+
+            <TouchableOpacity
+              style={styles.infoButton}
+              onPress={toggleDetails}
+            >
+              <Ionicons name="information-circle-outline" size={28} color="#fff" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.cardContent}>
+            <Text style={styles.name}>{food.name}</Text>
+            <View style={styles.detailsRow}>
+              <Text style={styles.restaurant}>{food.restaurant}</Text>
+              <Text style={styles.price}>{food.price}</Text>
+            </View>
+          </View>
+
+          {showLikeIndicator && (
+            <View style={[styles.likeContainer, { opacity: likeOpacity }]}>
+              <Text style={styles.likeText}>LIKE</Text>
+            </View>
+          )}
+          
+          {showNopeIndicator && (
+            <View style={[styles.nopeContainer, { opacity: nopeOpacity }]}>
+              <Text style={styles.nopeText}>NOPE</Text>
+            </View>
+          )}
         </Animated.View>
       </PanGestureHandler>
 
@@ -184,8 +277,9 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
               source={{ uri: food.imageUrl }} 
               style={styles.modalImage}
               resizeMode="cover"
+              defaultSource={PLACEHOLDER_IMAGE}
+              onError={(e) => handleImageError(food.imageUrl, e.nativeEvent.error)}
             />
-            <View style={styles.modalImageOverlay} />
             
             <View style={styles.modalInfoContainer}>
               <Text style={styles.modalName}>{food.name}</Text>
@@ -194,18 +288,53 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
               <Text style={styles.modalDescription}>{food.description}</Text>
               
               <View style={styles.deliveryOptions}>
-                <TouchableOpacity style={styles.deliveryButton}>
-                  <Ionicons name="car-outline" size={30} color="#FF5A5F" />
-                  <Text style={styles.deliveryText}>Uber Eats</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.deliveryButton}>
-                  <Ionicons name="bicycle-outline" size={30} color="#FFBD00" />
-                  <Text style={styles.deliveryText}>Postmates</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.deliveryButton}>
-                  <Ionicons name="restaurant-outline" size={30} color="#01A5EC" />
-                  <Text style={styles.deliveryText}>DoorDash</Text>
-                </TouchableOpacity>
+                {food.deliveryServices && food.deliveryServices.length > 0 ? (
+                  food.deliveryServices.map((service, index) => {
+                    let iconName: any = 'car-outline';
+                    let iconColor = '#FF5A5F';
+                    let serviceName = service;
+                    
+                    if (service.toLowerCase().includes('uber')) {
+                      iconName = 'car-outline';
+                      iconColor = '#000000';
+                      serviceName = 'Uber Eats';
+                    } else if (service.toLowerCase().includes('postmates')) {
+                      iconName = 'bicycle-outline';
+                      iconColor = '#FFBD00';
+                      serviceName = 'Postmates';
+                    } else if (service.toLowerCase().includes('doordash')) {
+                      iconName = 'restaurant-outline';
+                      iconColor = '#FF3008';
+                      serviceName = 'DoorDash';
+                    } else if (service.toLowerCase().includes('grubhub')) {
+                      iconName = 'fast-food-outline';
+                      iconColor = '#F63440';
+                      serviceName = 'Grubhub';
+                    }
+                    
+                    return (
+                      <TouchableOpacity key={index} style={styles.deliveryButton}>
+                        <Ionicons name={iconName} size={30} color={iconColor} />
+                        <Text style={styles.deliveryText}>{serviceName}</Text>
+                      </TouchableOpacity>
+                    );
+                  })
+                ) : (
+                  <>
+                    <TouchableOpacity style={styles.deliveryButton}>
+                      <Ionicons name="car-outline" size={30} color="#FF5A5F" />
+                      <Text style={styles.deliveryText}>Uber Eats</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.deliveryButton}>
+                      <Ionicons name="bicycle-outline" size={30} color="#FFBD00" />
+                      <Text style={styles.deliveryText}>Postmates</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.deliveryButton}>
+                      <Ionicons name="restaurant-outline" size={30} color="#01A5EC" />
+                      <Text style={styles.deliveryText}>DoorDash</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
               </View>
             </View>
             <TouchableOpacity style={styles.closeButton} onPress={closeDetails}>
@@ -218,7 +347,6 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
   );
 };
 
-// Memoize component to prevent unnecessary re-renders
 export const FoodCard = memo(FoodCardComponent);
 
 const styles = StyleSheet.create({
@@ -241,42 +369,41 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  cardContent: {
+  imageContainer: {
     width: '100%',
-    height: '100%',
+    height: IMAGE_HEIGHT,
+    overflow: 'hidden',
+    backgroundColor: '#000',
   },
   image: {
     width: '100%',
     height: '100%',
   },
-  gradientOverlay: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: '40%',
-    borderBottomLeftRadius: 12,
-    borderBottomRightRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  miniGradientOverlay: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: '15%', // Even smaller overlay for text
-    borderBottomLeftRadius: 12,
-    borderBottomRightRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+  cardContent: {
+    padding: 14,
+    backgroundColor: 'white',
     justifyContent: 'center',
+    height: CARD_HEIGHT - IMAGE_HEIGHT,
+  },
+  detailsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    marginTop: 4,
+  },
+  name: {
+    color: '#333',
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+  restaurant: {
+    color: '#666',
+    fontSize: 16,
+  },
+  price: {
+    color: '#FF3B5C',
+    fontSize: 18,
+    fontWeight: 'bold',
   },
   likeContainer: {
     position: 'absolute',
@@ -310,29 +437,13 @@ const styles = StyleSheet.create({
     color: '#FF3B5C',
     letterSpacing: 1,
   },
-  infoBar: {
+  infoButton: {
     position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 16,
-    paddingBottom: 20,
-  },
-  foodName: {
-    color: 'white',
-    fontSize: 28,
-    fontWeight: 'bold',
-    textShadowColor: 'rgba(0, 0, 0, 0.8)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 3,
-  },
-  restaurantName: {
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 16,
-    marginTop: 2,
-    textShadowColor: 'rgba(0, 0, 0, 0.8)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 3,
+    top: 10,
+    right: 10,
+    padding: 8,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
   },
   modalOverlay: {
     flex: 1,
@@ -426,4 +537,54 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-}); 
+  socialProofContainer: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    width: '60%',
+  },
+  trendingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 59, 48, 0.85)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginBottom: 6,
+    alignSelf: 'flex-start',
+  },
+  trendingText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  ordersBadge: {
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginBottom: 6,
+    alignSelf: 'flex-start',
+  },
+  ordersText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  limitedTimeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 122, 255, 0.85)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+  },
+  limitedTimeText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+});
