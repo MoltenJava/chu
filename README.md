@@ -25,6 +25,42 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
+## Integrating AWS S3 Images and Restaurant Metadata
+
+This app supports loading real restaurant data and images from AWS S3. Follow these steps to integrate your S3 data:
+
+1. Update the S3 bucket URL in `utils/metadataService.ts`:
+
+   ```typescript
+   const S3_BASE_URL = 'https://your-s3-bucket-name.s3.amazonaws.com';
+   ```
+
+2. Make sure your `westwood_restaurant_metadata.json` file follows this format:
+
+   ```json
+   [
+     {
+       "id": "unique-id-1",
+       "name": "Dish Name",
+       "description": "Dish description",
+       "image_path": "/path/to/image.jpg",
+       "restaurant": "Restaurant Name",
+       "price_level": "2",
+       "cuisine_type": "Italian",
+       "food_types": ["dinner", "comfort"],
+       "delivery_services": ["UberEats", "Postmates"]
+     }
+   ]
+   ```
+
+3. Download the metadata file locally (for development and testing):
+
+   ```bash
+   node scripts/downloadMetadata.js
+   ```
+
+4. The app will automatically use the real data when available, falling back to mock data if needed.
+
 ## Get a fresh project
 
 When you're ready, run:

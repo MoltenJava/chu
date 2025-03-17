@@ -7,6 +7,12 @@ export interface FoodItem {
   price: string;
   cuisine: string;
   foodType: FoodType[];
+  deliveryServices?: string[];
+  deliveryUrls?: {
+    uberEats?: string;
+    postmates?: string;
+    doorDash?: string;
+  };
 }
 
 export type FoodType = 
