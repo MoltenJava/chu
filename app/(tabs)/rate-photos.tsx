@@ -149,6 +149,15 @@ export default function RatePhotosScreen() {
         <Stack.Screen 
           options={{
             title: 'Rate Photos',
+            headerLeft: () => (
+              <TouchableOpacity 
+                onPress={handleUndo} 
+                disabled={!canUndo}
+                style={[styles.headerButton, !canUndo && styles.headerButtonDisabled]}
+              >
+                <Ionicons name="arrow-back-circle" size={28} color={canUndo ? "#FF3B5C" : "#CCCCCC"} />
+              </TouchableOpacity>
+            ),
             headerRight: () => (
               <TouchableOpacity onPress={handleResetRatings} style={styles.resetButton}>
                 <Ionicons name="refresh" size={24} color="#FF3B5C" />
@@ -349,10 +358,11 @@ const styles = StyleSheet.create({
   },
   undoButtonContainer: {
     position: 'absolute',
-    bottom: 20,
+    bottom: 85,
     width: '100%',
     alignItems: 'center',
     padding: 10,
+    zIndex: 100,
   },
   undoButton: {
     backgroundColor: '#FF3B5C',
@@ -361,6 +371,11 @@ const styles = StyleSheet.create({
     borderRadius: 25,
     flexDirection: 'row',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 5,
   },
   undoButtonDisabled: {
     backgroundColor: '#CCCCCC',
@@ -370,5 +385,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     marginLeft: 8,
+  },
+  headerButton: {
+    padding: 8,
+    marginLeft: 4,
+  },
+  headerButtonDisabled: {
+    opacity: 0.5,
   },
 }); 
