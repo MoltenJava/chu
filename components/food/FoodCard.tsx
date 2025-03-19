@@ -1,4 +1,4 @@
-import React, { useState, memo, useCallback, useEffect, useRef } from 'react';
+import React, { useState, memo, useCallback, useEffect, useRef, useMemo } from 'react';
 import { StyleSheet, View, Text, Image, Dimensions, Platform, Modal, TouchableOpacity, Pressable, ViewStyle } from 'react-native';
 import { PanGestureHandler, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -145,6 +145,65 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
     }
   }, [onSwipe]);
 
+  const CardContent = useMemo(() => {
+    return (
+      <>
+        <View style={styles.imageContainer}>
+          <Image
+            source={{ uri: food.imageUrl }}
+            style={styles.image}
+            resizeMode="cover"
+            defaultSource={PLACEHOLDER_IMAGE}
+            onError={(e) => handleImageError(food.imageUrl, e.nativeEvent.error)}
+          />
+
+          <View style={styles.socialProofContainer}>
+            {socialProofData.isTrending && (
+              <View style={styles.trendingBadge}>
+                <MaterialIcons name="trending-up" size={14} color="#fff" />
+                <Text style={styles.trendingText}>Trending</Text>
+              </View>
+            )}
+            
+            {socialProofData.orderCount > 50 && (
+              <View style={styles.ordersBadge}>
+                <Text style={styles.ordersText}>{socialProofData.orderCount}+ ordered today</Text>
+              </View>
+            )}
+
+            {socialProofData.isLimitedTime && socialProofData.availableUntil && (
+              <View style={styles.limitedTimeBadge}>
+                <MaterialCommunityIcons name="clock-outline" size={14} color="#fff" />
+                <Text style={styles.limitedTimeText}>Until {socialProofData.availableUntil}</Text>
+              </View>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={styles.infoButton}
+            onPress={toggleDetails}
+          >
+            <Ionicons name="information-circle-outline" size={28} color="#fff" />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.cardContent}>
+          <Text style={styles.name} numberOfLines={2} ellipsizeMode="tail">
+            {food.name}
+          </Text>
+          <View style={styles.detailsRow}>
+            <Text style={styles.restaurant} numberOfLines={1} ellipsizeMode="tail">
+              {food.restaurant}
+            </Text>
+            <Text style={styles.price}>
+              {food.price}
+            </Text>
+          </View>
+        </View>
+      </>
+    );
+  }, [food.id, food.imageUrl, food.name, food.restaurant, food.price, socialProofData, toggleDetails]);
+
   const animatedCardStyle = useAnimatedStyle(() => {
     return {
       transform: [
@@ -161,7 +220,8 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
         }
       ],
       opacity: cardOpacity.value,
-      zIndex: isFirst ? 1 : 0,
+      zIndex: isFirst ? 10 : 10 - index,
+      position: 'absolute',
     };
   });
 
@@ -229,59 +289,7 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
     <>
       <PanGestureHandler enabled={isFirst} onGestureEvent={gestureHandler}>
         <Animated.View style={[styles.card, animatedCardStyle]}>
-          <View style={styles.imageContainer}>
-            <Image
-              source={{ uri: food.imageUrl }}
-              style={styles.image}
-              resizeMode="cover"
-              defaultSource={PLACEHOLDER_IMAGE}
-              onError={(e) => handleImageError(food.imageUrl, e.nativeEvent.error)}
-            />
-
-            <View style={styles.socialProofContainer}>
-              {socialProofData.isTrending && (
-                <View style={styles.trendingBadge}>
-                  <MaterialIcons name="trending-up" size={14} color="#fff" />
-                  <Text style={styles.trendingText}>Trending</Text>
-                </View>
-              )}
-              
-              {socialProofData.orderCount > 50 && (
-                <View style={styles.ordersBadge}>
-                  <Text style={styles.ordersText}>{socialProofData.orderCount}+ ordered today</Text>
-                </View>
-              )}
-
-              {socialProofData.isLimitedTime && socialProofData.availableUntil && (
-                <View style={styles.limitedTimeBadge}>
-                  <MaterialCommunityIcons name="clock-outline" size={14} color="#fff" />
-                  <Text style={styles.limitedTimeText}>Until {socialProofData.availableUntil}</Text>
-                </View>
-              )}
-            </View>
-
-            <TouchableOpacity
-              style={styles.infoButton}
-              onPress={toggleDetails}
-            >
-              <Ionicons name="information-circle-outline" size={28} color="#fff" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.cardContent}>
-            <Text style={styles.name} numberOfLines={2} ellipsizeMode="tail">
-              {food.name}
-            </Text>
-            <View style={styles.detailsRow}>
-              <Text style={styles.restaurant} numberOfLines={1} ellipsizeMode="tail">
-                {food.restaurant}
-              </Text>
-              <Text style={styles.price}>
-                {food.price}
-              </Text>
-            </View>
-          </View>
-
+          {CardContent}
           {showLikeIndicator && (
             <View style={[styles.likeContainer, { opacity: likeOpacity }]}>
               <Text style={styles.likeText}>LIKE</Text>

@@ -162,12 +162,14 @@ export default function RatePhotosScreen() {
             <View style={styles.cardContainer}>
               {foodData.map((food, index) => {
                 const isFirst = index === currentIndex;
-                // Only render a few cards for performance
-                if (index < currentIndex || index >= currentIndex + 3) return null;
+                
+                // Render more cards for smoother transitions but keep them hidden until needed
+                // This prevents the "changing image" effect by having cards already rendered
+                if (index < currentIndex || index >= currentIndex + 10) return null;
                 
                 return (
                   <FoodCard
-                    key={food.id}
+                    key={`food-${food.id}`} // Keep stable key to prevent re-rendering
                     food={food}
                     onSwipe={handleSwipe}
                     isFirst={isFirst}
