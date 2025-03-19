@@ -20,7 +20,7 @@ import Animated, {
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const CARD_WIDTH = SCREEN_WIDTH * 0.92;
 const CARD_HEIGHT = SCREEN_HEIGHT * 0.68;
-const IMAGE_HEIGHT = CARD_HEIGHT * 0.82;
+const IMAGE_HEIGHT = CARD_HEIGHT * 0.75;
 const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.25;
 
 type GestureContext = {
@@ -269,10 +269,16 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
           </View>
 
           <View style={styles.cardContent}>
-            <Text style={styles.name}>{food.name}</Text>
+            <Text style={styles.name} numberOfLines={2} ellipsizeMode="tail">
+              {food.name}
+            </Text>
             <View style={styles.detailsRow}>
-              <Text style={styles.restaurant}>{food.restaurant}</Text>
-              <Text style={styles.price}>{food.price}</Text>
+              <Text style={styles.restaurant} numberOfLines={1} ellipsizeMode="tail">
+                {food.restaurant}
+              </Text>
+              <Text style={styles.price}>
+                {food.price}
+              </Text>
             </View>
           </View>
 
@@ -411,7 +417,7 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   cardContent: {
-    padding: 14,
+    padding: 16,
     backgroundColor: 'white',
     justifyContent: 'center',
     height: CARD_HEIGHT - IMAGE_HEIGHT,
@@ -420,16 +426,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 4,
+    marginTop: 0,
   },
   name: {
     color: '#333',
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: 'bold',
+    flexShrink: 1,
+    marginBottom: 8,
   },
   restaurant: {
     color: '#666',
     fontSize: 16,
+    flexShrink: 1,
+    maxWidth: '70%',
   },
   price: {
     color: '#FF3B5C',

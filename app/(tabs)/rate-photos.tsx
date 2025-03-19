@@ -133,6 +133,17 @@ export default function RatePhotosScreen() {
               </Text>
             </View>
             
+            {foodData.length > currentIndex && (
+              <View style={styles.currentItemInfo}>
+                <Text style={styles.currentItemName} numberOfLines={2}>
+                  {foodData[currentIndex].name}
+                </Text>
+                <Text style={styles.currentItemRestaurant}>
+                  {foodData[currentIndex].restaurant} • {foodData[currentIndex].price}
+                </Text>
+              </View>
+            )}
+            
             <View style={styles.instructionsContainer}>
               <View style={styles.instruction}>
                 <Ionicons name="arrow-back" size={24} color="#FF3B5C" />
@@ -183,9 +194,9 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   statsText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
-    color: '#555',
+    color: '#777',
   },
   cardContainer: {
     flex: 1,
@@ -206,6 +217,32 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     fontSize: 16,
     color: '#333',
+  },
+  currentItemInfo: {
+    alignItems: 'center',
+    marginVertical: 10,
+    paddingHorizontal: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    paddingVertical: 12,
+    borderRadius: 12,
+    width: '92%',
+    alignSelf: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  currentItemName: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    color: '#222',
+  },
+  currentItemRestaurant: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 4,
   },
   emptyContainer: {
     flex: 1,
