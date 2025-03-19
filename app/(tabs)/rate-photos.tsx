@@ -6,6 +6,7 @@ import { loadFoodData } from '../../data/realFoodData';
 import { savePhotoRating, filterRatedItems, clearPhotoRatings } from '../../utils/photoRatingService';
 import { Stack } from 'expo-router';
 import { FoodCard } from '../../components/food/FoodCard';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 export default function RatePhotosScreen() {
   const [foodData, setFoodData] = useState<FoodItem[]>([]);
@@ -98,74 +99,76 @@ export default function RatePhotosScreen() {
   }, [loadData]);
   
   return (
-    <View style={styles.container}>
-      <Stack.Screen 
-        options={{
-          title: 'Rate Photos',
-          headerRight: () => (
-            <TouchableOpacity onPress={handleResetRatings} style={styles.resetButton}>
-              <Ionicons name="refresh" size={24} color="#FF3B5C" />
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <View style={styles.container}>
+        <Stack.Screen 
+          options={{
+            title: 'Rate Photos',
+            headerRight: () => (
+              <TouchableOpacity onPress={handleResetRatings} style={styles.resetButton}>
+                <Ionicons name="refresh" size={24} color="#FF3B5C" />
+              </TouchableOpacity>
+            ),
+          }} 
+        />
+        
+        {isLoading ? (
+          <ActivityIndicator size="large" color="#FF3B5C" />
+        ) : foodData.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <MaterialIcons name="check-circle" size={60} color="#01DF8B" />
+            <Text style={styles.emptyText}>All photos have been rated!</Text>
+            <TouchableOpacity 
+              style={styles.resetAllButton}
+              onPress={handleResetRatings}
+            >
+              <Text style={styles.resetAllButtonText}>Reset All Ratings</Text>
             </TouchableOpacity>
-          ),
-        }} 
-      />
-      
-      {isLoading ? (
-        <ActivityIndicator size="large" color="#FF3B5C" />
-      ) : foodData.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <MaterialIcons name="check-circle" size={60} color="#01DF8B" />
-          <Text style={styles.emptyText}>All photos have been rated!</Text>
-          <TouchableOpacity 
-            style={styles.resetAllButton}
-            onPress={handleResetRatings}
-          >
-            <Text style={styles.resetAllButtonText}>Reset All Ratings</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <>
-          <View style={styles.statsContainer}>
-            <Text style={styles.statsText}>
-              Rated: {ratedPhotos} / {totalPhotos} photos ({Math.round((ratedPhotos / totalPhotos) * 100)}%)
-            </Text>
           </View>
-          
-          <View style={styles.instructionsContainer}>
-            <View style={styles.instruction}>
-              <Ionicons name="arrow-back" size={24} color="#FF3B5C" />
-              <Text style={styles.instructionText}>Swipe Left for Bad Photos</Text>
+        ) : (
+          <>
+            <View style={styles.statsContainer}>
+              <Text style={styles.statsText}>
+                Rated: {ratedPhotos} / {totalPhotos} photos ({Math.round((ratedPhotos / totalPhotos) * 100)}%)
+              </Text>
             </View>
-            <View style={styles.instruction}>
-              <Ionicons name="arrow-up" size={24} color="#FFA500" />
-              <Text style={styles.instructionText}>Swipe Up for Meh Photos</Text>
+            
+            <View style={styles.instructionsContainer}>
+              <View style={styles.instruction}>
+                <Ionicons name="arrow-back" size={24} color="#FF3B5C" />
+                <Text style={styles.instructionText}>Swipe Left for Bad Photos</Text>
+              </View>
+              <View style={styles.instruction}>
+                <Ionicons name="arrow-up" size={24} color="#FFA500" />
+                <Text style={styles.instructionText}>Swipe Up for Meh Photos</Text>
+              </View>
+              <View style={styles.instruction}>
+                <Ionicons name="arrow-forward" size={24} color="#01DF8B" />
+                <Text style={styles.instructionText}>Swipe Right for Good Photos</Text>
+              </View>
             </View>
-            <View style={styles.instruction}>
-              <Ionicons name="arrow-forward" size={24} color="#01DF8B" />
-              <Text style={styles.instructionText}>Swipe Right for Good Photos</Text>
+            
+            <View style={styles.cardContainer}>
+              {foodData.map((food, index) => {
+                const isFirst = index === currentIndex;
+                // Only render a few cards for performance
+                if (index < currentIndex || index >= currentIndex + 3) return null;
+                
+                return (
+                  <FoodCard
+                    key={food.id}
+                    food={food}
+                    onSwipe={handleSwipe}
+                    isFirst={isFirst}
+                    index={index - currentIndex}
+                  />
+                );
+              })}
             </View>
-          </View>
-          
-          <View style={styles.cardContainer}>
-            {foodData.map((food, index) => {
-              const isFirst = index === currentIndex;
-              // Only render a few cards for performance
-              if (index < currentIndex || index >= currentIndex + 3) return null;
-              
-              return (
-                <FoodCard
-                  key={food.id}
-                  food={food}
-                  onSwipe={handleSwipe}
-                  isFirst={isFirst}
-                  index={index - currentIndex}
-                />
-              );
-            })}
-          </View>
-        </>
-      )}
-    </View>
+          </>
+        )}
+      </View>
+    </GestureHandlerRootView>
   );
 }
 
