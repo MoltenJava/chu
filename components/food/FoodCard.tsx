@@ -40,8 +40,10 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
   const [isSwiping, setIsSwiping] = useState(false);
   const [showLikeIndicator, setShowLikeIndicator] = useState(false);
   const [showNopeIndicator, setShowNopeIndicator] = useState(false);
+  const [showMehIndicator, setShowMehIndicator] = useState(false);
   const [likeOpacity, setLikeOpacity] = useState(0);
   const [nopeOpacity, setNopeOpacity] = useState(0);
+  const [mehOpacity, setMehOpacity] = useState(0);
   
   const isMountedRef = useRef(true);
   
@@ -61,6 +63,7 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
     () => {
       return {
         x: translateX.value,
+        y: translateY.value,
         isSwiping: isSwiping
       };
     },
@@ -68,6 +71,7 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
       if (current.isSwiping) {
         const rightOpacity = Math.min(Math.max(current.x / SWIPE_THRESHOLD, 0), 1);
         const leftOpacity = Math.min(Math.max(-current.x / SWIPE_THRESHOLD, 0), 1);
+        const upOpacity = Math.min(Math.max(-current.y / SWIPE_THRESHOLD, 0), 1);
         
         if (rightOpacity > 0) {
           runOnJS(setShowLikeIndicator)(true);
@@ -81,13 +85,22 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
           runOnJS(setShowNopeIndicator)(false);
         }
         
+        if (upOpacity > 0) {
+          runOnJS(setShowMehIndicator)(true);
+        } else {
+          runOnJS(setShowMehIndicator)(false);
+        }
+        
         runOnJS(setLikeOpacity)(rightOpacity);
         runOnJS(setNopeOpacity)(leftOpacity);
+        runOnJS(setMehOpacity)(upOpacity);
       } else {
         runOnJS(setShowLikeIndicator)(false);
         runOnJS(setShowNopeIndicator)(false);
+        runOnJS(setShowMehIndicator)(false);
         runOnJS(setLikeOpacity)(0);
         runOnJS(setNopeOpacity)(0);
+        runOnJS(setMehOpacity)(0);
       }
     },
     [isSwiping]
@@ -161,7 +174,7 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
       if (!isFirst) return;
       
       translateX.value = ctx.startX + event.translationX;
-      translateY.value = ctx.startY + event.translationY * 0.3;
+      translateY.value = ctx.startY + event.translationY;
       
       if (Math.abs(event.translationX) > 10 || Math.abs(event.translationY) > 10) {
         runOnJS(setIsSwiping)(true);
@@ -176,21 +189,33 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
         direction = 'right';
       } else if (event.translationX < -SWIPE_THRESHOLD) {
         direction = 'left';
+      } else if (event.translationY < -SWIPE_THRESHOLD) {
+        direction = 'up';
       }
       
       if (direction !== 'none') {
-        translateX.value = withTiming(
-          direction === 'right' ? SCREEN_WIDTH * 1.2 : -SCREEN_WIDTH * 1.2,
-          { duration: 250 },
-          () => {
-            runOnJS(handleSwipeComplete)(food, direction);
-          }
-        );
-        
-        translateY.value = withTiming(
-          direction === 'right' ? 30 : -30,
-          { duration: 250 }
-        );
+        if (direction === 'up') {
+          translateY.value = withTiming(
+            -SCREEN_HEIGHT * 1.2,
+            { duration: 250 },
+            () => {
+              runOnJS(handleSwipeComplete)(food, direction);
+            }
+          );
+        } else {
+          translateX.value = withTiming(
+            direction === 'right' ? SCREEN_WIDTH * 1.2 : -SCREEN_WIDTH * 1.2,
+            { duration: 250 },
+            () => {
+              runOnJS(handleSwipeComplete)(food, direction);
+            }
+          );
+          
+          translateY.value = withTiming(
+            direction === 'right' ? 30 : -30,
+            { duration: 250 }
+          );
+        }
       } else {
         translateX.value = withSpring(0, { damping: 15 });
         translateY.value = withSpring(0, { damping: 15 });
@@ -260,6 +285,12 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
           {showNopeIndicator && (
             <View style={[styles.nopeContainer, { opacity: nopeOpacity }]}>
               <Text style={styles.nopeText}>NOPE</Text>
+            </View>
+          )}
+          
+          {showMehIndicator && (
+            <View style={[styles.mehContainer, { opacity: mehOpacity }]}>
+              <Text style={styles.mehText}>MEH</Text>
             </View>
           )}
         </Animated.View>
@@ -586,5 +617,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     marginLeft: 4,
+  },
+  mehContainer: {
+    position: 'absolute',
+    top: 40,
+    alignSelf: 'center',
+    transform: [{ rotate: '0deg' }],
+    borderWidth: 5,
+    borderColor: '#FFA500',
+    borderRadius: 5,
+    padding: 8,
+  },
+  mehText: {
+    fontSize: 42,
+    fontWeight: '900',
+    color: '#FFA500',
+    letterSpacing: 1,
   },
 }); 

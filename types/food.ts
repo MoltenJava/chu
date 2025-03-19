@@ -13,6 +13,7 @@ export interface FoodItem {
     postmates?: string;
     doorDash?: string;
   };
+  rating?: PhotoRating;
 }
 
 export type FoodType = 
@@ -28,7 +29,9 @@ export type FoodType =
   | 'seafood'
   | 'fast-food';
 
-export type SwipeDirection = 'left' | 'right' | 'none';
+export type PhotoRating = 'good' | 'bad' | 'meh' | null;
+
+export type SwipeDirection = 'left' | 'right' | 'up' | 'none';
 
 export interface SwipeHistoryItem {
   foodItem: FoodItem;
