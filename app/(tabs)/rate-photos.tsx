@@ -144,18 +144,18 @@ export default function RatePhotosScreen() {
               </View>
             )}
             
-            <View style={styles.instructionsContainer}>
-              <View style={styles.instruction}>
+            <View style={styles.instructionsButtons}>
+              <View style={styles.swipeButton}>
                 <Ionicons name="arrow-back" size={24} color="#FF3B5C" />
-                <Text style={styles.instructionText}>Swipe Left for Bad Photos</Text>
+                <Text style={styles.swipeButtonText}>Bad</Text>
               </View>
-              <View style={styles.instruction}>
+              <View style={styles.swipeButton}>
                 <Ionicons name="arrow-up" size={24} color="#FFA500" />
-                <Text style={styles.instructionText}>Swipe Up for Meh Photos</Text>
+                <Text style={styles.swipeButtonText}>Meh</Text>
               </View>
-              <View style={styles.instruction}>
+              <View style={styles.swipeButton}>
                 <Ionicons name="arrow-forward" size={24} color="#01DF8B" />
-                <Text style={styles.instructionText}>Swipe Right for Good Photos</Text>
+                <Text style={styles.swipeButtonText}>Good</Text>
               </View>
             </View>
             
@@ -191,36 +191,15 @@ const styles = StyleSheet.create({
   statsContainer: {
     padding: 12,
     alignItems: 'center',
-    marginBottom: 5,
   },
   statsText: {
     fontSize: 14,
     fontWeight: '600',
     color: '#777',
   },
-  cardContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingBottom: 20,
-  },
-  instructionsContainer: {
-    padding: 15,
-    marginBottom: 10,
-  },
-  instruction: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  instructionText: {
-    marginLeft: 8,
-    fontSize: 16,
-    color: '#333',
-  },
   currentItemInfo: {
     alignItems: 'center',
-    marginVertical: 10,
+    marginVertical: 8,
     paddingHorizontal: 20,
     backgroundColor: 'rgba(255, 255, 255, 0.95)',
     paddingVertical: 12,
@@ -243,6 +222,43 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     marginTop: 4,
+  },
+  instructionsButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    marginBottom: 5,
+  },
+  swipeButton: {
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  swipeButtonText: {
+    fontSize: 14,
+    marginTop: 4,
+    fontWeight: '600',
+    color: '#333',
+  },
+  cardContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: 10,
+  },
+  instructionsContainer: {
+    padding: 15,
+    marginBottom: 10,
+  },
+  instruction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  instructionText: {
+    marginLeft: 8,
+    fontSize: 16,
+    color: '#333',
   },
   emptyContainer: {
     flex: 1,
