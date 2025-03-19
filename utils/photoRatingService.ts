@@ -35,13 +35,20 @@ export const savePhotoRating = async (photoId: string, rating: PhotoRating): Pro
     // Get existing ratings
     const ratings = await loadPhotoRatings();
     
-    // Update the rating for this photo
-    ratings[photoId] = rating;
+    if (rating === null) {
+      // Remove the rating if null is passed
+      if (ratings[photoId]) {
+        delete ratings[photoId];
+        console.log(`Removed rating for photo ${photoId}`);
+      }
+    } else {
+      // Update the rating for this photo
+      ratings[photoId] = rating;
+      console.log(`Saved rating "${rating}" for photo ${photoId}`);
+    }
     
     // Save back to storage
     await AsyncStorage.setItem(RATINGS_STORAGE_KEY, JSON.stringify(ratings));
-    
-    console.log(`Saved rating "${rating}" for photo ${photoId}`);
   } catch (error) {
     console.error('Error saving photo rating:', error);
   }

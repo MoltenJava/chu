@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { FoodItem, SwipeDirection } from '../../types/food';
@@ -14,6 +14,8 @@ export default function RatePhotosScreen() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [totalPhotos, setTotalPhotos] = useState(0);
   const [ratedPhotos, setRatedPhotos] = useState(0);
+  const [canUndo, setCanUndo] = useState(false);
+  const ratingHistory = useRef<{foodId: string, rating: 'good' | 'bad' | 'meh' | null}[]>([]);
   
   // Function to load food data
   const loadData = useCallback(async () => {
@@ -29,6 +31,8 @@ export default function RatePhotosScreen() {
       setTotalPhotos(allFood.length);
       setRatedPhotos(allFood.length - unratedFood.length);
       setCurrentIndex(0);
+      setCanUndo(false);
+      ratingHistory.current = [];
     } catch (error) {
       console.error('Error loading food data:', error);
       Alert.alert('Error', 'Failed to load food data. Please try again.');
@@ -42,7 +46,39 @@ export default function RatePhotosScreen() {
     loadData();
   }, [loadData]);
   
-  // Handle swipe events
+  // Add the undo functionality
+  const handleUndo = useCallback(async () => {
+    if (ratingHistory.current.length === 0) {
+      setCanUndo(false);
+      return;
+    }
+    
+    // Get the last rating
+    const lastRating = ratingHistory.current.pop();
+    
+    if (!lastRating) return;
+    
+    try {
+      // Remove the rating
+      await savePhotoRating(lastRating.foodId, null);
+      
+      // Decrease the rated photos count
+      setRatedPhotos(prev => Math.max(0, prev - 1));
+      
+      // Move back to the previous card
+      setCurrentIndex(prev => Math.max(0, prev - 1));
+      
+      // Disable undo if there's no more history
+      if (ratingHistory.current.length === 0) {
+        setCanUndo(false);
+      }
+    } catch (error) {
+      console.error('Error undoing rating:', error);
+      Alert.alert('Error', 'Failed to undo rating. Please try again.');
+    }
+  }, []);
+  
+  // Handle swipe events - update to save rating history
   const handleSwipe = useCallback(async (food: FoodItem, direction: SwipeDirection) => {
     let rating = null;
     
@@ -66,6 +102,15 @@ export default function RatePhotosScreen() {
     
     // Save the rating
     await savePhotoRating(food.id, rating as 'good' | 'bad' | 'meh');
+    
+    // Save to history for undo
+    ratingHistory.current.push({
+      foodId: food.id,
+      rating: rating as 'good' | 'bad' | 'meh'
+    });
+    
+    // Enable undo
+    setCanUndo(true);
     
     // Update counters
     setRatedPhotos(prev => prev + 1);
@@ -178,6 +223,18 @@ export default function RatePhotosScreen() {
                 );
               })}
             </View>
+            
+            {/* Add Undo Button */}
+            <View style={styles.undoButtonContainer}>
+              <TouchableOpacity
+                style={[styles.undoButton, !canUndo && styles.undoButtonDisabled]}
+                onPress={handleUndo}
+                disabled={!canUndo}
+              >
+                <Ionicons name="arrow-undo" size={18} color="white" />
+                <Text style={styles.undoButtonText}>Undo Last Rating</Text>
+              </TouchableOpacity>
+            </View>
           </>
         )}
       </View>
@@ -289,5 +346,29 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+  undoButtonContainer: {
+    position: 'absolute',
+    bottom: 20,
+    width: '100%',
+    alignItems: 'center',
+    padding: 10,
+  },
+  undoButton: {
+    backgroundColor: '#FF3B5C',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  undoButtonDisabled: {
+    backgroundColor: '#CCCCCC',
+  },
+  undoButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 8,
   },
 }); 
