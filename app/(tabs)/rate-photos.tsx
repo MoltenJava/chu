@@ -1,12 +1,21 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import { FoodItem, SwipeDirection } from '../../types/food';
+import {
+  StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, Alert,
+  Share, Platform, Modal, FlatList, ScrollView
+} from 'react-native';
+import { Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { FoodItem, SwipeDirection, PhotoRating } from '../../types/food';
 import { loadFoodData } from '../../data/realFoodData';
-import { savePhotoRating, filterRatedItems, clearPhotoRatings } from '../../utils/photoRatingService';
+import {
+  savePhotoRating, filterRatedItems, clearPhotoRatings,
+  loadPhotoRatings, exportRatingsToJSON, importRatingsFromJSON
+} from '../../utils/photoRatingService';
 import { Stack } from 'expo-router';
 import { FoodCard } from '../../components/food/FoodCard';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as DocumentPicker from 'expo-document-picker';
 
 export default function RatePhotosScreen() {
   const [foodData, setFoodData] = useState<FoodItem[]>([]);
@@ -16,6 +25,10 @@ export default function RatePhotosScreen() {
   const [ratedPhotos, setRatedPhotos] = useState(0);
   const [canUndo, setCanUndo] = useState(false);
   const ratingHistory = useRef<{foodId: string, rating: 'good' | 'bad' | 'meh' | null}[]>([]);
+  
+  // State for ratings display
+  const [showRatingsModal, setShowRatingsModal] = useState(false);
+  const [ratingStats, setRatingStats] = useState({ good: 0, bad: 0, meh: 0 });
   
   // Function to load food data
   const loadData = useCallback(async () => {
@@ -33,11 +46,37 @@ export default function RatePhotosScreen() {
       setCurrentIndex(0);
       setCanUndo(false);
       ratingHistory.current = [];
+      
+      // Update rating stats
+      updateRatingStats();
     } catch (error) {
       console.error('Error loading food data:', error);
       Alert.alert('Error', 'Failed to load food data. Please try again.');
     } finally {
       setIsLoading(false);
+    }
+  }, []);
+  
+  // Update rating statistics
+  const updateRatingStats = useCallback(async () => {
+    try {
+      const ratings = await loadPhotoRatings();
+      const stats = {
+        good: 0,
+        bad: 0,
+        meh: 0
+      };
+      
+      // Count ratings by type
+      Object.values(ratings).forEach((rating) => {
+        if (rating && stats[rating] !== undefined) {
+          stats[rating]++;
+        }
+      });
+      
+      setRatingStats(stats);
+    } catch (error) {
+      console.error('Error loading rating stats:', error);
     }
   }, []);
   
@@ -72,11 +111,14 @@ export default function RatePhotosScreen() {
       if (ratingHistory.current.length === 0) {
         setCanUndo(false);
       }
+      
+      // Update rating stats
+      updateRatingStats();
     } catch (error) {
       console.error('Error undoing rating:', error);
       Alert.alert('Error', 'Failed to undo rating. Please try again.');
     }
-  }, []);
+  }, [updateRatingStats]);
   
   // Handle swipe events - update to save rating history
   const handleSwipe = useCallback(async (food: FoodItem, direction: SwipeDirection) => {
@@ -118,11 +160,14 @@ export default function RatePhotosScreen() {
     // Move to next photo
     setCurrentIndex(prev => prev + 1);
     
+    // Update rating stats
+    updateRatingStats();
+    
     // If we've gone through all photos, reload the data
     if (currentIndex >= foodData.length - 1) {
       loadData();
     }
-  }, [currentIndex, foodData.length, loadData]);
+  }, [currentIndex, foodData.length, loadData, updateRatingStats]);
   
   // Reset all ratings
   const handleResetRatings = useCallback(async () => {
@@ -143,6 +188,94 @@ export default function RatePhotosScreen() {
     );
   }, [loadData]);
   
+  // Export ratings to a JSON file
+  const handleExportRatings = useCallback(async () => {
+    try {
+      const fileName = `food_ratings_${new Date().toISOString().split('T')[0]}.json`;
+      const fileUri = `${FileSystem.documentDirectory}${fileName}`;
+      
+      // Get ratings and export to JSON
+      const jsonData = await exportRatingsToJSON();
+      
+      // Write to file
+      await FileSystem.writeAsStringAsync(fileUri, jsonData, {
+        encoding: FileSystem.EncodingType.UTF8
+      });
+      
+      // Share the file
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'application/json',
+          dialogTitle: 'Export Food Ratings',
+          UTI: 'public.json'
+        });
+      } else {
+        Alert.alert('Error', 'Sharing is not available on this device');
+      }
+    } catch (error) {
+      console.error('Error exporting ratings:', error);
+      Alert.alert('Error', 'Failed to export ratings. Please try again.');
+    }
+  }, []);
+  
+  // Import ratings from a JSON file
+  const handleImportRatings = useCallback(async () => {
+    try {
+      // Pick a JSON file
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/json',
+        copyToCacheDirectory: true
+      });
+      
+      if (!result.assets || result.assets.length === 0 || result.canceled) {
+        return; // User cancelled or no file selected
+      }
+      
+      const selectedFile = result.assets[0];
+      
+      // Read the file content
+      const fileContent = await FileSystem.readAsStringAsync(selectedFile.uri);
+      
+      // Show confirmation dialog
+      Alert.alert(
+        'Import Ratings',
+        'Do you want to merge these ratings with your existing ones, or replace all your ratings?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Merge',
+            onPress: async () => {
+              // Import and merge with existing ratings
+              await importRatingsFromJSON(fileContent, false);
+              Alert.alert('Success', 'Ratings imported and merged successfully');
+              loadData();
+            }
+          },
+          {
+            text: 'Replace',
+            style: 'destructive',
+            onPress: async () => {
+              // Import and replace existing ratings
+              await importRatingsFromJSON(fileContent, true);
+              Alert.alert('Success', 'Ratings imported and replaced successfully');
+              loadData();
+            }
+          }
+        ]
+      );
+      
+    } catch (error) {
+      console.error('Error importing ratings:', error);
+      Alert.alert('Error', 'Failed to import ratings. Please try again.');
+    }
+  }, [loadData]);
+  
+  // Open ratings summary modal
+  const handleShowRatings = useCallback(() => {
+    updateRatingStats();
+    setShowRatingsModal(true);
+  }, [updateRatingStats]);
+  
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View style={styles.container}>
@@ -159,9 +292,20 @@ export default function RatePhotosScreen() {
               </TouchableOpacity>
             ),
             headerRight: () => (
-              <TouchableOpacity onPress={handleResetRatings} style={styles.resetButton}>
-                <Ionicons name="refresh" size={24} color="#FF3B5C" />
-              </TouchableOpacity>
+              <View style={styles.headerButtonsContainer}>
+                <TouchableOpacity 
+                  onPress={handleShowRatings} 
+                  style={styles.headerRightButton}
+                >
+                  <MaterialIcons name="data-usage" size={24} color="#FF3B5C" />
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  onPress={handleResetRatings} 
+                  style={styles.headerRightButton}
+                >
+                  <Ionicons name="refresh" size={24} color="#FF3B5C" />
+                </TouchableOpacity>
+              </View>
             ),
           }} 
         />
@@ -172,12 +316,29 @@ export default function RatePhotosScreen() {
           <View style={styles.emptyContainer}>
             <MaterialIcons name="check-circle" size={60} color="#01DF8B" />
             <Text style={styles.emptyText}>All photos have been rated!</Text>
-            <TouchableOpacity 
-              style={styles.resetAllButton}
-              onPress={handleResetRatings}
-            >
-              <Text style={styles.resetAllButtonText}>Reset All Ratings</Text>
-            </TouchableOpacity>
+            <View style={styles.actionButtonsContainer}>
+              <TouchableOpacity 
+                style={styles.actionButton}
+                onPress={handleExportRatings}
+              >
+                <Ionicons name="share-outline" size={18} color="white" />
+                <Text style={styles.actionButtonText}>Export Ratings</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.actionButton}
+                onPress={handleImportRatings}
+              >
+                <Ionicons name="download-outline" size={18} color="white" />
+                <Text style={styles.actionButtonText}>Import Ratings</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.actionButton, styles.dangerButton]}
+                onPress={handleResetRatings}
+              >
+                <Ionicons name="refresh" size={18} color="white" />
+                <Text style={styles.actionButtonText}>Reset All</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         ) : (
           <>
@@ -246,6 +407,118 @@ export default function RatePhotosScreen() {
             </View>
           </>
         )}
+        
+        {/* Ratings Summary Modal */}
+        <Modal
+          visible={showRatingsModal}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowRatingsModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Ratings Summary</Text>
+                <TouchableOpacity 
+                  style={styles.closeButton}
+                  onPress={() => setShowRatingsModal(false)}
+                >
+                  <Ionicons name="close" size={24} color="#333" />
+                </TouchableOpacity>
+              </View>
+              
+              <ScrollView style={styles.modalBody}>
+                <View style={styles.statsSection}>
+                  <Text style={styles.sectionTitle}>Statistics</Text>
+                  <View style={styles.statsRow}>
+                    <View style={styles.statItem}>
+                      <Text style={[styles.statValue, styles.goodStat]}>{ratingStats.good}</Text>
+                      <Text style={styles.statLabel}>Good</Text>
+                    </View>
+                    <View style={styles.statItem}>
+                      <Text style={[styles.statValue, styles.mehStat]}>{ratingStats.meh}</Text>
+                      <Text style={styles.statLabel}>Meh</Text>
+                    </View>
+                    <View style={styles.statItem}>
+                      <Text style={[styles.statValue, styles.badStat]}>{ratingStats.bad}</Text>
+                      <Text style={styles.statLabel}>Bad</Text>
+                    </View>
+                  </View>
+                  <View style={styles.statPieContainer}>
+                    <View style={[
+                      styles.statPiePiece, 
+                      styles.goodPiece, 
+                      { flex: ratingStats.good || 1 }
+                    ]} />
+                    <View style={[
+                      styles.statPiePiece, 
+                      styles.mehPiece, 
+                      { flex: ratingStats.meh || 1 }
+                    ]} />
+                    <View style={[
+                      styles.statPiePiece, 
+                      styles.badPiece, 
+                      { flex: ratingStats.bad || 1 }
+                    ]} />
+                  </View>
+                </View>
+                
+                <View style={styles.actionsSection}>
+                  <Text style={styles.sectionTitle}>Export/Import Ratings</Text>
+                  <Text style={styles.sectionDescription}>
+                    Export your ratings to share with others, or import ratings from other users to combine results.
+                  </Text>
+                  
+                  <View style={styles.actionButtonsContainer}>
+                    <TouchableOpacity 
+                      style={styles.actionButton}
+                      onPress={() => {
+                        setShowRatingsModal(false);
+                        setTimeout(() => {
+                          handleExportRatings();
+                        }, 500); // Delay to allow modal to close
+                      }}
+                    >
+                      <Ionicons name="share-outline" size={18} color="white" />
+                      <Text style={styles.actionButtonText}>Export Ratings</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={styles.actionButton}
+                      onPress={() => {
+                        setShowRatingsModal(false);
+                        setTimeout(() => {
+                          handleImportRatings();
+                        }, 500); // Delay to allow modal to close
+                      }}
+                    >
+                      <Ionicons name="download-outline" size={18} color="white" />
+                      <Text style={styles.actionButtonText}>Import Ratings</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                
+                <View style={styles.instructionsSection}>
+                  <Text style={styles.sectionTitle}>How to Combine Results</Text>
+                  <Text style={styles.instructionText}>
+                    1. Have each user export their ratings using the Export button.
+                  </Text>
+                  <Text style={styles.instructionText}>
+                    2. Collect all the exported JSON files in one place.
+                  </Text>
+                  <Text style={styles.instructionText}>
+                    3. On the device where you want to combine results, use the Import button to load each JSON file.
+                  </Text>
+                  <Text style={styles.instructionText}>
+                    4. Choose "Merge" when importing each file to combine the ratings.
+                  </Text>
+                  <Text style={styles.instructionText}>
+                    5. After importing all files, you can export the combined results.
+                  </Text>
+                </View>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
       </View>
     </GestureHandlerRootView>
   );
@@ -314,20 +587,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingBottom: 10,
   },
-  instructionsContainer: {
-    padding: 15,
-    marginBottom: 10,
-  },
-  instruction: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  instructionText: {
-    marginLeft: 8,
-    fontSize: 16,
-    color: '#333',
-  },
   emptyContainer: {
     flex: 1,
     alignItems: 'center',
@@ -392,5 +651,150 @@ const styles = StyleSheet.create({
   },
   headerButtonDisabled: {
     opacity: 0.5,
+  },
+  headerButtonsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerRightButton: {
+    padding: 8,
+    marginLeft: 4,
+  },
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    width: '90%',
+    maxHeight: '80%',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  closeButton: {
+    padding: 4,
+  },
+  modalBody: {
+    padding: 16,
+    maxHeight: '70%',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 12,
+  },
+  sectionDescription: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 16,
+    lineHeight: 20,
+  },
+  statsSection: {
+    marginBottom: 24,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 16,
+  },
+  statItem: {
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 14,
+    color: '#666',
+  },
+  goodStat: {
+    color: '#01DF8B',
+  },
+  mehStat: {
+    color: '#FFA500',
+  },
+  badStat: {
+    color: '#FF3B5C',
+  },
+  statPieContainer: {
+    flexDirection: 'row',
+    height: 20,
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginTop: 8,
+  },
+  statPiePiece: {
+    height: '100%',
+  },
+  goodPiece: {
+    backgroundColor: '#01DF8B',
+  },
+  mehPiece: {
+    backgroundColor: '#FFA500',
+  },
+  badPiece: {
+    backgroundColor: '#FF3B5C',
+  },
+  actionsSection: {
+    marginBottom: 24,
+  },
+  actionButtonsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 16,
+    flexWrap: 'wrap',
+    marginHorizontal: -8,
+  },
+  actionButton: {
+    backgroundColor: '#FF3B5C',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    margin: 8,
+  },
+  dangerButton: {
+    backgroundColor: '#FF3B5C',
+  },
+  actionButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  instructionsSection: {
+    marginBottom: 20,
+  },
+  instructionText: {
+    fontSize: 14,
+    color: '#444',
+    marginBottom: 12,
+    lineHeight: 20,
   },
 }); 

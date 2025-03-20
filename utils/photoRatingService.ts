@@ -103,4 +103,63 @@ export const getRatedItems = async (foodItems: FoodItem[]): Promise<FoodItem[]> 
   
   // Return only rated items
   return itemsWithRatings.filter(item => item.rating !== null);
+};
+
+/**
+ * Export ratings to a JSON string
+ */
+export const exportRatingsToJSON = async (): Promise<string> => {
+  try {
+    // Get all ratings
+    const ratings = await loadPhotoRatings();
+    
+    // Create export object with metadata
+    const exportData = {
+      version: 1,
+      timestamp: new Date().toISOString(),
+      ratings: ratings
+    };
+    
+    // Convert to JSON
+    return JSON.stringify(exportData, null, 2);
+  } catch (error) {
+    console.error('Error exporting ratings:', error);
+    throw error;
+  }
+};
+
+/**
+ * Import ratings from a JSON string
+ * @param jsonString The JSON string containing ratings
+ * @param replace Whether to replace existing ratings (true) or merge with them (false)
+ */
+export const importRatingsFromJSON = async (jsonString: string, replace: boolean = false): Promise<void> => {
+  try {
+    // Parse the JSON
+    const importData = JSON.parse(jsonString);
+    
+    if (!importData.ratings) {
+      throw new Error('Invalid ratings data: missing ratings object');
+    }
+    
+    // Get existing ratings if merging
+    let currentRatings: PhotoRatings = {};
+    if (!replace) {
+      currentRatings = await loadPhotoRatings();
+    }
+    
+    // Merge or replace ratings
+    const newRatings = {
+      ...currentRatings,
+      ...importData.ratings
+    };
+    
+    // Save to storage
+    await AsyncStorage.setItem(RATINGS_STORAGE_KEY, JSON.stringify(newRatings));
+    
+    console.log(`${replace ? 'Replaced' : 'Merged'} ratings successfully`);
+  } catch (error) {
+    console.error('Error importing ratings:', error);
+    throw error;
+  }
 }; 
