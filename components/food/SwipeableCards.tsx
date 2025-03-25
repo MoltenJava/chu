@@ -1394,6 +1394,24 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         </View>
         
         <View style={styles.headerRightContainer}>
+          {/* Couple Mode Button */}
+          <TouchableOpacity 
+            style={styles.coupleButton} 
+            onPress={() => {
+              // Use setTimeout to avoid blocking UI
+              setTimeout(() => {
+                // Import router dynamically to avoid circular dependencies
+                const { router } = require('expo-router');
+                router.push('/couple-mode');
+              }, 0);
+            }}
+            activeOpacity={0.6}
+          >
+            <View style={styles.coupleButtonContainer}>
+              <Ionicons name="heart" size={22} color="#FF3B5C" />
+            </View>
+          </TouchableOpacity>
+          
           {/* Filter Button */}
           <TouchableOpacity 
             style={styles.filterButton} 
@@ -1970,7 +1988,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerCenterContainer: {
-    flexDirection: 'row',
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2672,6 +2690,28 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  coupleButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  coupleButtonContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'white',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#FF3B5C',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#ffccd5',
   },
 });
 

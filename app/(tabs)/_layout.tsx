@@ -57,6 +57,15 @@ export default function TabLayout() {
           headerShown: true,
         }}
       />
+      <Tabs.Screen
+        name="couple-mode"
+        options={{
+          title: 'Couple Mode',
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="heart.fill" color={color} />,
+          href: null, // Make it inaccessible from the tab bar
+          headerShown: false,
+        }}
+      />
     </Tabs>
   );
 }

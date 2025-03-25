@@ -53,4 +53,20 @@ export interface FilterOption {
   icon: string;
   color: string;
   selected: boolean;
+}
+
+// Couple Mode Types
+export interface CoupleSession {
+  id: string;
+  sessionCode: string;
+  startTime: number;
+  endTime: number;
+  status: 'pending' | 'active' | 'completed';
+  participants: string[];
+  currentIndex: number;
+}
+
+export interface AgreeMatch {
+  foodItem: FoodItem;
+  timestamp: number;
 } 
