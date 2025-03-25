@@ -3,7 +3,7 @@ import { StyleSheet, View, StatusBar as RNStatusBar, Platform, ActivityIndicator
 import { StatusBar } from 'expo-status-bar';
 import { foodData } from '../../data/foodData'; // Keep as fallback
 import { loadFoodData, loadRealFoodData, getRestaurantItems } from '../../data/realFoodData'; // Import our new data source and restaurant items function
-import { SwipeableCards } from '../../../chu/components/food/SwipeableCards';
+import { SwipeableCards } from '../../components/food/SwipeableCards';
 import { FoodItem, SwipeHistoryItem } from '../../types/food';
 
 // Simple Error Boundary component to catch and handle rendering errors gracefully
