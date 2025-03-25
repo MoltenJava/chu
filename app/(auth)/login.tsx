@@ -5,9 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { ThemedView } from '@/components/ThemedView';
 import { ThemedText } from '@/components/ThemedText';
 import { useState } from 'react';
-import Constants from 'expo-constants';
-
-const APPLE_SERVICE_ID = 'com.jaz.chewzee.service';
+import * as Crypto from 'expo-crypto';
 
 export default function LoginScreen() {
   const [isLoading, setIsLoading] = useState(false);
@@ -19,18 +17,29 @@ export default function LoginScreen() {
       setIsLoading(true);
       setError(null);
 
+      // Generate a random string for the raw nonce
+      const rawNonce = Array.from(await Crypto.getRandomBytesAsync(32))
+        .map(byte => byte.toString(16).padStart(2, '0'))
+        .join('');
+      
+      // Hash the raw nonce with SHA256
+      const hashedNonce = await Crypto.digestStringAsync(
+        Crypto.CryptoDigestAlgorithm.SHA256,
+        rawNonce
+      );
+
       const credential = await AppleAuthentication.signInAsync({
         requestedScopes: [
           AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
           AppleAuthentication.AppleAuthenticationScope.EMAIL,
         ],
+        nonce: hashedNonce // Pass the hashed nonce to Apple
       });
 
       console.log('Got Apple credentials:', {
         email: credential.email,
         fullName: credential.fullName,
         hasToken: !!credential.identityToken,
-        identityToken: credential.identityToken?.substring(0, 50) + '...',
       });
 
       if (!credential.identityToken) {
@@ -42,7 +51,7 @@ export default function LoginScreen() {
       const { data, error } = await supabase.auth.signInWithIdToken({
         provider: 'apple',
         token: credential.identityToken,
-        nonce: APPLE_SERVICE_ID // Use the Service ID as the nonce/audience
+        nonce: rawNonce // Pass the raw (unhashed) nonce to Supabase
       });
 
       console.log('Supabase sign in result:', { 
