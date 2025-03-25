@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   StyleSheet, 
-  View, 
   TouchableOpacity, 
-  Animated, 
-  Platform
+  View, 
+  Text,
+  Animated as RNAnimated,
+  ViewStyle
 } from 'react-native';
 import { FontAwesome5 } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -12,169 +13,108 @@ import * as Haptics from 'expo-haptics';
 interface WaiterButtonProps {
   onPress: (isActive: boolean) => void;
   isActive: boolean;
+  style?: ViewStyle;
 }
 
 const WaiterButton: React.FC<WaiterButtonProps> = ({ 
-  onPress,
-  isActive
+  onPress, 
+  isActive,
+  style 
 }) => {
-  const [animation] = useState(new Animated.Value(0));
-  const [pressAnimation] = useState(new Animated.Value(1));
-  const mountedRef = useRef(true);
+  // Animation values
+  const [animation] = useState(new RNAnimated.Value(isActive ? 1 : 0));
   
-  // Animate glow when active - always run this effect regardless of conditions
+  // Debug values to track state
+  const [lastToggleTime, setLastToggleTime] = useState<number>(0);
+  const [pressCount, setPressCount] = useState<number>(0);
+  
+  // Update animation when isActive changes from parent
   useEffect(() => {
-    // Define all animations up front
-    const startGlowAnimation = () => {
-      animation.stopAnimation();
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(animation, {
-            toValue: 1,
-            duration: 1200,
-            useNativeDriver: false,
-          }),
-          Animated.timing(animation, {
-            toValue: 0.7,
-            duration: 1200,
-            useNativeDriver: false,
-          }),
-        ])
-      ).start();
-    };
-
-    const stopGlowAnimation = () => {
-      animation.stopAnimation();
-      Animated.timing(animation, {
-        toValue: 0,
-        duration: 300,
-        useNativeDriver: false,
-      }).start();
-    };
-
-    // Run the appropriate animation based on isActive
-    if (isActive) {
-      startGlowAnimation();
-    } else {
-      stopGlowAnimation();
-    }
-
-    // Clean up function
-    return () => {
-      animation.stopAnimation();
-      mountedRef.current = false;
-    };
+    RNAnimated.timing(animation, {
+      toValue: isActive ? 1 : 0,
+      duration: 300,
+      useNativeDriver: false
+    }).start();
   }, [isActive, animation]);
   
-  // Button border style - static to avoid type errors
-  const buttonBorderStyle = isActive ? {
-    borderColor: '#4CAF50',
-    borderWidth: 2,
-  } : {
-    borderColor: '#ffccd5',
-    borderWidth: 1,
-  };
-  
-  // Enhanced perimeter glow style - focused only on the outer edge with stronger effect
-  const perimeterGlowStyle = {
-    shadowOpacity: animation.interpolate({
-      inputRange: [0, 1],
-      outputRange: [0, 0.9],  // Increased from 0.8 for more visibility
-    }),
-    shadowColor: isActive ? '#4CAF50' : 'transparent',
-    shadowRadius: animation.interpolate({
-      inputRange: [0, 1],
-      outputRange: [0, 16],  // Increased from 12 for wider glow effect
-    }),
-    shadowOffset: { width: 0, height: 0 },
-  };
-  
-  // Button scale animation style
-  const buttonScaleStyle = {
-    transform: [{ scale: pressAnimation }]
-  };
-  
-  // Simplified press handler - directly toggle by passing the opposite state
-  const handlePress = () => {
-    // Provide haptic feedback
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-    } catch (error) {
-      // Ignore haptic errors
+  // Handle press with debounce to prevent double-taps
+  const handlePress = useCallback(() => {
+    // Debug log for taps
+    console.log('[WAITER-BUTTON-PRESS] Button pressed, current state:', isActive);
+    
+    // Increment press count for debugging
+    setPressCount(prev => {
+      const newCount = prev + 1;
+      console.log(`[WAITER-BUTTON-PRESS] Press count: ${newCount}`);
+      return newCount;
+    });
+    
+    // Check if enough time has passed since last press (debounce)
+    const now = Date.now();
+    if (now - lastToggleTime < 500) {
+      console.log('[WAITER-BUTTON-PRESS] Ignoring press, too soon after last press');
+      return;
     }
     
-    // Animate button press
-    Animated.sequence([
-      Animated.timing(pressAnimation, {
-        toValue: 0.92,
-        duration: 100,
-        useNativeDriver: false
-      }),
-      Animated.timing(pressAnimation, {
-        toValue: 1,
-        duration: 100,
-        useNativeDriver: false
-      })
-    ]).start();
+    // Update last toggle time
+    setLastToggleTime(now);
     
-    // Just call onPress directly with the opposite of current state
+    // Provide haptic feedback
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    
+    // Toggle waiter mode - IMPORTANT: pass the opposite of current state
+    console.log('[WAITER-BUTTON-PRESS] Calling onPress with new state:', !isActive);
     onPress(!isActive);
-  };
+    
+  }, [isActive, onPress, lastToggleTime]);
+  
+  // Interpolate animation for background color change
+  const backgroundColor = animation.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['white', '#FF3B5C']
+  });
   
   return (
-    <Animated.View style={[styles.buttonWrapper, perimeterGlowStyle]}>
-      <Animated.View style={buttonScaleStyle}>
-        <TouchableOpacity
-          style={[
-            styles.button,
-            isActive && styles.buttonActive,
-            buttonBorderStyle
-          ]}
-          onPress={handlePress}
-          activeOpacity={0.7}
-        >
-          <FontAwesome5
-            name="user-tie" 
-            size={24} 
-            color={isActive ? "#FFFFFF" : "#FF3B5C"} 
-          />
-        </TouchableOpacity>
-      </Animated.View>
-    </Animated.View>
+    <TouchableOpacity 
+      onPress={handlePress}
+      activeOpacity={0.7}
+      style={[styles.container, style]}
+      testID="waiter-button"
+    >
+      <RNAnimated.View style={[
+        styles.button,
+        { backgroundColor }
+      ]}>
+        <FontAwesome5 
+          name="user-tie" 
+          size={22} 
+          color={isActive ? "white" : "#FF3B5C"} 
+        />
+      </RNAnimated.View>
+    </TouchableOpacity>
   );
 };
 
 const styles = StyleSheet.create({
-  buttonWrapper: {
-    borderRadius: 15,
-    elevation: 8,
-    backgroundColor: 'transparent',
-    padding: 8, // Increased padding to give more space for the glow effect
-  },
-  button: {
-    width: 48,
-    height: 48,
-    borderRadius: 15,
-    backgroundColor: 'white',
+  container: {
+    width: 40,
+    height: 40,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  button: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#FF3B5C',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
     borderWidth: 1,
     borderColor: '#ffccd5',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.15,
-        shadowRadius: 2,
-      },
-      android: {
-        elevation: 2,
-      },
-    }),
-  },
-  buttonActive: {
-    backgroundColor: '#4CAF50',
-    borderColor: '#4CAF50',
   }
 });
 

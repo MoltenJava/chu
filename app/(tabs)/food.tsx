@@ -2,7 +2,7 @@ import React, { useState, useCallback, memo, useEffect, ReactNode } from 'react'
 import { StyleSheet, View, StatusBar as RNStatusBar, Platform, ActivityIndicator, Text } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { foodData } from '../../data/foodData'; // Keep as fallback
-import { loadFoodData, loadRealFoodData } from '../../data/realFoodData'; // Import our new data source
+import { loadFoodData, loadRealFoodData, getRestaurantItems } from '../../data/realFoodData'; // Import our new data source and restaurant items function
 import { SwipeableCards } from '../../../chu/components/food/SwipeableCards';
 import { FoodItem, SwipeHistoryItem } from '../../types/food';
 
@@ -93,8 +93,21 @@ const FoodScreen: React.FC = () => {
   }, []);
 
   const handleSwipeHistoryUpdate = useCallback((history: SwipeHistoryItem[]) => {
-    setSwipeHistory(history);
+    // Use functional update pattern to prevent state updates during render cycle
+    setSwipeHistory(prev => {
+      // Only update if the new history is different
+      if (prev.length !== history.length) {
+        return history;
+      }
+      return prev;
+    });
     // This could be used for analytics or to improve recommendations
+  }, []);
+
+  // Function to get all items for a specific restaurant - used by waiter mode
+  const handleRequestRestaurantItems = useCallback(async (restaurant: string): Promise<FoodItem[]> => {
+    console.log(`FoodScreen: Requesting all items for restaurant: ${restaurant}`);
+    return await getRestaurantItems(restaurant);
   }, []);
 
   // Show loading indicator while data is being fetched
@@ -124,10 +137,12 @@ const FoodScreen: React.FC = () => {
       
       <ErrorBoundary>
         <SwipeableCards
+          key="swipe-cards"
           data={foodItems}
           onLike={handleLike}
           onDislike={handleDislike}
           onSwipeHistoryUpdate={handleSwipeHistoryUpdate}
+          onRequestRestaurantItems={handleRequestRestaurantItems}
         />
       </ErrorBoundary>
     </View>

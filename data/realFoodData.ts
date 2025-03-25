@@ -6,6 +6,9 @@ import { calculateBatchDistances } from '../utils/locationService';
 // Cache for the loaded food data
 let cachedFoodData: FoodItem[] | null = null;
 
+// Cache for the full dataset (all items from S3 without limitation)
+let fullDatasetCache: FoodItem[] | null = null;
+
 // Maximum number of items to load to avoid performance issues
 const MAX_FOOD_ITEMS = 200;
 
@@ -32,6 +35,10 @@ export const loadRealFoodData = async (): Promise<FoodItem[]> => {
     let foodItems = await fetchRestaurantMetadata();
     
     console.log(`Got ${foodItems.length} items from metadata, calculating distances progressively...`);
+    
+    // Store the full dataset in cache for later use by the waiter mode
+    fullDatasetCache = [...foodItems];
+    console.log(`Stored full dataset with ${fullDatasetCache.length} items in cache for waiter mode`);
     
     // Ensure coordinates are present for every item (use default if missing)
     foodItems = foodItems.map(item => {
@@ -64,6 +71,43 @@ export const loadRealFoodData = async (): Promise<FoodItem[]> => {
     console.error('Error loading real food data:', error);
     
     // Fallback to mock data
+    return [];
+  }
+};
+
+/**
+ * Get all items for a specific restaurant from the full dataset
+ * Used by the waiter mode to show all items from a restaurant
+ */
+export const getRestaurantItems = async (restaurant: string): Promise<FoodItem[]> => {
+  console.log(`[RESTAURANT-ITEMS] Fetching all items for ${restaurant}`);
+  
+  try {
+    // If we already have the full dataset in memory, use it
+    if (fullDatasetCache && fullDatasetCache.length > 0) {
+      console.log(`[RESTAURANT-ITEMS] Using cached full dataset with ${fullDatasetCache.length} items`);
+      
+      // Filter for the requested restaurant
+      const restaurantItems = fullDatasetCache.filter(item => item.restaurant === restaurant);
+      console.log(`[RESTAURANT-ITEMS] Found ${restaurantItems.length} items for ${restaurant} in full dataset`);
+      
+      return restaurantItems;
+    }
+    
+    // If not cached, fetch the full dataset
+    console.log(`[RESTAURANT-ITEMS] Full dataset not in cache, fetching from S3`);
+    const fullData = await fetchRestaurantMetadata();
+    
+    // Cache for future requests
+    fullDatasetCache = fullData;
+    
+    // Filter for the requested restaurant
+    const restaurantItems = fullData.filter(item => item.restaurant === restaurant);
+    console.log(`[RESTAURANT-ITEMS] Found ${restaurantItems.length} items for ${restaurant} in freshly fetched dataset of ${fullData.length} items`);
+    
+    return restaurantItems;
+  } catch (error) {
+    console.error(`[RESTAURANT-ITEMS] Error fetching items for ${restaurant}:`, error);
     return [];
   }
 };
@@ -140,6 +184,7 @@ export const loadFoodData = async (): Promise<FoodItem[]> => {
  */
 export const clearFoodDataCache = (): void => {
   cachedFoodData = null;
+  fullDatasetCache = null;
 };
 
 /**

@@ -53,6 +53,7 @@ interface SwipeableCardsProps {
   onLike?: (food: FoodItem) => void;
   onDislike?: (food: FoodItem) => void;
   onSwipeHistoryUpdate?: (history: SwipeHistoryItem[]) => void;
+  onRequestRestaurantItems?: (restaurant: string) => Promise<FoodItem[]>;
 }
 
 // Centralized error logging function
@@ -68,6 +69,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   onLike,
   onDislike,
   onSwipeHistoryUpdate,
+  onRequestRestaurantItems,
 }) => {
   console.log('[CRASH-DEBUG] Mounting SwipeableCards component');
   
@@ -76,6 +78,12 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   
   // Create a unique stable ID for this component instance to use in keys
   const componentId = useRef(`swipe-${Date.now()}`).current;
+  
+  // Store reference to the complete dataset to ensure we have access to all 3000 items
+  const fullDatasetRef = useRef<FoodItem[]>(data);
+  
+  // Add debug log
+  console.log(`[FULL-DATASET-DEBUG] Initial data length: ${data.length}, fullDatasetRef length: ${fullDatasetRef.current.length}`);
   
   // Batch size constants for better performance
   const INITIAL_BATCH_SIZE = 50;
@@ -103,8 +111,6 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   // Waiter mode state
   const [waiterModeActive, setWaiterModeActive] = useState<boolean>(false);
   const [currentRestaurant, setCurrentRestaurant] = useState<string | null>(null);
-  // Add waiter mode toggling loading state
-  const [waiterModeLoading, setWaiterModeLoading] = useState<boolean>(false);
   
   // Track mounted state
   const isMountedRef = useRef(true);
@@ -116,6 +122,11 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   const isSwipingRef = useRef(false);
   // Track the last swipe time to add delay before preloading
   const lastSwipeTimeRef = useRef(0);
+  
+  // New refs to store pre-waiter mode state
+  const preWaiterModeDataRef = useRef<FoodItem[]>([]);
+  const preWaiterModeIndexRef = useRef<number>(0);
+  const isExitingWaiterModeRef = useRef<boolean>(false);
   
   // Reanimated shared values for animations
   const fadeAnim = useSharedValue(1);
@@ -143,10 +154,35 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     'fast-food': { icon: 'hamburger', color: '#F44336', iconFamily: 'FontAwesome5' }
   };
 
-  // Initial data batching
+  // Initial data batching with enhanced logging
   useEffect(() => {
     if (data && data.length > 0) {
-      // Take only the first batch for initial render
+      // Add detailed logging about the data being received
+      console.log(`[DATA-DEBUG] Received data with ${data.length} items`);
+      
+      // Log some unique restaurant names as a sanity check
+      const restaurantSet = new Set<string>();
+      data.forEach(item => {
+        if (item.restaurant) restaurantSet.add(item.restaurant);
+      });
+      console.log(`[DATA-DEBUG] Found ${restaurantSet.size} unique restaurants in this dataset`);
+      
+      // Sample the first few restaurants for debugging
+      const restaurantSample = Array.from(restaurantSet).slice(0, 5);
+      console.log(`[DATA-DEBUG] Sample restaurants: ${restaurantSample.join(', ')}`);
+      
+      // Store the full dataset in our ref - IMPORTANT: This must contain ALL items from S3
+      fullDatasetRef.current = [...data];
+      console.log(`[FULL-DATA] Stored complete dataset with ${fullDatasetRef.current.length} items in fullDatasetRef`);
+      
+      // Check if this is likely the full dataset or just a partial batch
+      if (data.length >= 1000) {
+        console.log(`[DATA-DEBUG] Detected full dataset with ${data.length} items`);
+      } else {
+        console.log(`[DATA-DEBUG] Warning: Received smaller dataset (${data.length} items) - may not be complete`);
+      }
+      
+      // Take only the first batch for initial render (for performance)
       const initialBatch = data.slice(0, INITIAL_BATCH_SIZE);
       console.log(`[CRASH-DEBUG] Initializing with first ${initialBatch.length} items out of ${data.length}`);
       setBatchedData(initialBatch);
@@ -155,6 +191,12 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   
   // Load more data as user swipes
   useEffect(() => {
+    // Skip if in waiter mode - we've already loaded all restaurant items
+    if (waiterModeActive) {
+      console.log("[BATCH-DEBUG] Skipping batch loading while in waiter mode");
+      return;
+    }
+  
     // If we're approaching the end of our batched data, load more
     if (currentIndex > batchedData.length - 10 && batchedData.length < Math.min(data.length, MAX_VISIBLE_ITEMS)) {
       const nextBatchSize = Math.min(data.length - batchedData.length, INITIAL_BATCH_SIZE);
@@ -165,7 +207,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         setBatchedData(prev => [...prev, ...nextBatch]);
       }
     }
-  }, [currentIndex, batchedData.length, data]);
+  }, [currentIndex, batchedData.length, data, waiterModeActive]);
   
   // Create refs to keep track of latest state values without causing effect reruns
   const filteredDataRef = useRef(filteredData);
@@ -185,6 +227,18 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     // Skip if component is not mounted or during animation
     if (!isMountedRef.current) return;
     
+    // CRITICAL FIX: Use our ref flag to completely skip this effect when exiting waiter mode
+    if (isExitingWaiterModeRef.current) {
+      console.log("[WAITER-EXIT-DEBUG] Skipping filter effect because we're in the process of exiting waiter mode");
+      return;
+    }
+    
+    // Skip if waiter mode is active - we handle that directly in the handleWaiterButtonPress
+    if (waiterModeActive && currentRestaurant) {
+      console.log("Skipping filter effect because waiter mode is already active");
+      return;
+    }
+    
     console.log("Data filter effect running, waiter mode:", waiterModeActive, "restaurant:", currentRestaurant);
     
     try {
@@ -194,25 +248,25 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       // Create a new filtered dataset based on current conditions
       let newFilteredData;
       
-      // First handle waiter mode filtering
-      if (waiterModeActive && currentRestaurant) {
-        console.log("Filtering by restaurant:", currentRestaurant);
-        // Filter by current restaurant
-        newFilteredData = batchedData.filter(item => item.restaurant === currentRestaurant);
+      // Apply regular filters
+      if (selectedFilters.length > 0) {
+        console.log("Filtering by food types:", selectedFilters);
+        // Apply selected food type filters
+        newFilteredData = batchedData.filter(item => 
+          item.foodType.some(type => selectedFilters.includes(type))
+        );
       } else {
-        // Not in waiter mode, apply regular filters
-        if (selectedFilters.length > 0) {
-          console.log("Filtering by food types:", selectedFilters);
-          // Apply selected food type filters
-          newFilteredData = batchedData.filter(item => 
-            item.foodType.some(type => selectedFilters.includes(type))
-          );
-        } else {
-          // No filters, show all batched data
-          console.log("No filters applied, showing all data");
-          newFilteredData = [...batchedData];
-        }
+        // No filters, show all batched data
+        console.log("No filters applied, showing all data");
+        newFilteredData = [...batchedData];
       }
+      
+      // Skip filtering if nothing changed
+      if (JSON.stringify(newFilteredData) === JSON.stringify(filteredData)) {
+        return;
+      }
+      
+      console.log(`Updating filtered data with ${newFilteredData.length} items`);
       
       // Update filtered data with the new dataset
       setFilteredData(newFilteredData);
@@ -221,10 +275,26 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       if (currentItem) {
         const newIndex = newFilteredData.findIndex(item => item.id === currentItem.id);
         
-        // If we can't find the item in the new dataset, reset to first item
+        // If we can't find the item in the new dataset
         if (newIndex === -1) {
-          console.log("Current item not found in new dataset, resetting to first item");
-          setCurrentIndex(0);
+          // Check if we're exiting waiter mode
+          const isPostWaiterMode = !waiterModeActive && currentRestaurant === null;
+          
+          if (isPostWaiterMode) {
+            // If we're right after waiter mode, try to maintain a reasonable position
+            const safeIndex = Math.min(currentIndexRef.current, newFilteredData.length - 1);
+            console.log(`[WAITER-EXIT] Maintaining position near index ${safeIndex} after waiter mode`);
+            if (safeIndex >= 0) {
+              setCurrentIndex(safeIndex);
+            }
+          } else {
+            // Normal case - reset to first item
+            console.log("Current item not found in new dataset, resetting to first item");
+            setCurrentIndex(0);
+          }
+        } else if (newIndex !== currentIndexRef.current) {
+          // Found item at different position, update index
+          setCurrentIndex(newIndex);
         }
         // Otherwise keep the current index (stay on the same card)
       }
@@ -277,15 +347,9 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     // Skip if no filtered data or index out of bounds
     if (!filteredData || filteredData.length === 0 || currentIndex >= filteredData.length) return;
     
-    // Get the restaurant from the current item
-    const restaurant = filteredData[currentIndex]?.restaurant || null;
-    
-    // Only update if different and not already updating
-    if (restaurant !== currentRestaurant && !waiterModeLoading) {
-      // No console log here! This runs on every index change
-      setCurrentRestaurant(restaurant);
-    }
-  }, [currentIndex, waiterModeActive, waiterModeLoading, currentRestaurant, filteredData]);
+    // In waiter mode, we don't need to update the restaurant since it's already set
+    // This prevents the reload loop by keeping the restaurant constant
+  }, [currentIndex, waiterModeActive, filteredData]);
 
   // Create all animated styles at component level
   const fadeAnimStyle = useAnimatedStyle(() => {
@@ -522,7 +586,15 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         // Call the onSwipeHistoryUpdate callback if provided
         if (onSwipeHistoryUpdate) {
           try {
-            onSwipeHistoryUpdate(newHistory);
+            // Use setTimeout to ensure state updates don't happen during render
+            const timeoutId = setTimeout(() => {
+              if (isMountedRef.current) {
+                onSwipeHistoryUpdate(newHistory);
+              }
+            }, 0);
+            
+            // Store timeout for cleanup
+            timeoutsRef.current.push(timeoutId);
           } catch (error) {
             console.error("Error in onSwipeHistoryUpdate callback:", error);
           }
@@ -735,7 +807,6 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       // Force all values to default
       fadeAnim.value = 1;
       setIsFilterChanging(false);
-      setWaiterModeLoading(false);
       
       // Ensure we can generate new cards by forcing a re-render with a key change
       // Create a new set of filtered data with the same content
@@ -749,21 +820,332 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     }
   }, [currentIndex, filteredData, fadeAnim]);
 
-  // Handle waiter button press - extremely simple implementation
+  // Function to fetch all restaurant items directly from API
+  const fetchAllRestaurantItems = async (restaurant: string): Promise<FoodItem[]> => {
+    try {
+      console.log(`Fetching ALL items for ${restaurant} directly from API`);
+      const response = await fetch(`https://test-westwood.vercel.app/api/restaurants/${encodeURIComponent(restaurant)}`);
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      
+      const restaurantItems = await response.json();
+      console.log(`Successfully fetched ${restaurantItems.length} items for ${restaurant} from API`);
+      return restaurantItems;
+    } catch (error) {
+      console.error('Error fetching restaurant items:', error);
+      return [];
+    }
+  };
+
+  // Handle waiter button press - improved to use the callback to request ALL restaurant items
   const handleWaiterButtonPress = useCallback((newIsActive: boolean) => {
-    console.log("Waiter button toggled to:", newIsActive);
+    console.log("[WAITER-BUTTON] Waiter button toggled to:", newIsActive, "Current waiter mode active:", waiterModeActive);
     
-    // Directly set the waiter mode to the new state, no conditions
-    setWaiterModeActive(newIsActive);
+    // Debug the state of data references
+    console.log(`[WAITER-DEBUG] Current data state:
+    - fullDatasetRef: ${fullDatasetRef.current.length} items
+    - batchedData: ${batchedData.length} items
+    - filteredData: ${filteredData.length} items
+    - currentIndex: ${currentIndex}`);
     
-    // Update restaurant only when activating waiter mode
-    if (newIsActive) {
+    // Skip if not mounted
+    if (!isMountedRef.current) return;
+    
+    // CRITICAL FIX: Always force the UI state to match the incoming toggle state
+    // This ensures the toggle works both ways
+    if (newIsActive !== waiterModeActive) {
+      console.log(`[WAITER-DEBUG] Forcing waiter mode state from ${waiterModeActive} to ${newIsActive}`);
+    }
+    
+    // If activating waiter mode, use the callback to request ALL restaurant items
+    if (newIsActive && filteredData.length > 0 && currentIndex < filteredData.length) {
+      // SAVE STATE: Store the current data before entering waiter mode
+      preWaiterModeDataRef.current = [...filteredData];
+      console.log(`[WAITER-DEBUG] Saved pre-waiter mode data: ${preWaiterModeDataRef.current.length} items`);
+      
       const currentItem = filteredData[currentIndex];
       if (currentItem) {
-        setCurrentRestaurant(currentItem.restaurant);
+        const restaurant = currentItem.restaurant;
+        
+        console.log(`[WAITER-DEBUG] Activating waiter mode for restaurant: ${restaurant}`);
+        
+        // First, try to find all items for this restaurant in our current dataset
+        const currentDatasetItems = fullDatasetRef.current.filter(item => item.restaurant === restaurant);
+        console.log(`[WAITER-DEBUG] Found ${currentDatasetItems.length} items in current dataset for ${restaurant}`);
+        
+        // Save the ETA values from the current card to use for all restaurant items
+        const currentDistanceFromUser = currentItem.distanceFromUser;
+        const currentEstimatedDuration = currentItem.estimatedDuration;
+        console.log(`[WAITER-DEBUG] Using distance: ${currentDistanceFromUser} and duration: ${currentEstimatedDuration} for all restaurant items`);
+        
+        // Set waiter mode UI first to avoid stuttering - IMPORTANT FIX
+        setWaiterModeActive(true);
+        setCurrentRestaurant(restaurant);
+        
+        // Use the callback to request ALL items for this restaurant from the complete S3 dataset
+        if (onRequestRestaurantItems) {
+          console.log(`[WAITER-DEBUG] Requesting ALL items for ${restaurant} from complete S3 dataset`);
+          
+          // DO NOT show loading indicator while in waiter mode - prevents stutter
+          // setIsFilterChanging(true); - REMOVED
+          
+          onRequestRestaurantItems(restaurant)
+            .then(allRestaurantItems => {
+              console.log(`[WAITER-DEBUG] Successfully retrieved ${allRestaurantItems.length} items for ${restaurant} from full dataset`);
+              
+              if (allRestaurantItems.length > 0) {
+                // Log the first few items as a sample
+                allRestaurantItems.slice(0, 3).forEach((item, index) => {
+                  console.log(`  Item ${index + 1}: ${item.name}`);
+                });
+                
+                if (allRestaurantItems.length > 1) {
+                  // Find the current item in the new dataset
+                  const currentItemId = currentItem.id;
+                  const currentItemIndex = allRestaurantItems.findIndex(item => item.id === currentItemId);
+                  
+                  console.log(`[WAITER-DEBUG] Current item ID: ${currentItemId}`);
+                  console.log(`[WAITER-DEBUG] Current item index in new dataset: ${currentItemIndex}`);
+                  
+                  // FIX STUTTER: Already set waiter mode state before API call - REMOVED
+                  // setWaiterModeActive(true);
+                  // setCurrentRestaurant(restaurant);
+                  
+                  // Use a better approach to prevent UI jumps/stutter
+                  if (isMountedRef.current) {
+                    // FIX 1: Reorder the array to make current item appear as #1
+                    let reorderedItems = [...allRestaurantItems];
+                    
+                    if (currentItemIndex !== -1) {
+                      // Move the current item to the beginning of the array
+                      const currentItemObj = reorderedItems.splice(currentItemIndex, 1)[0];
+                      reorderedItems = [currentItemObj, ...reorderedItems];
+                      console.log(`[WAITER-DEBUG] Reordered items to make ${currentItemObj.name} appear as #1`);
+                    }
+                    
+                    // FIX ETA: Add the distance and duration values from the current item to ALL restaurant items
+                    const processedItems = reorderedItems.map(item => ({
+                      ...item,
+                      distanceFromUser: currentDistanceFromUser,
+                      estimatedDuration: currentEstimatedDuration
+                    }));
+                    console.log(`[WAITER-DEBUG] Added distance and duration values to all ${processedItems.length} restaurant items`);
+                    
+                    // Set reordered restaurant items - avoid any delay that might cause stutter
+                    console.log(`[WAITER-DEBUG] Setting filtered data with ${processedItems.length} items`);
+                    setFilteredData(processedItems);
+                    
+                    // Always start at index 0 since we moved the current item there
+                    if (currentIndex !== 0) {
+                      setCurrentIndex(0);
+                    }
+                  }
+                  
+                  // No alert - removed as requested
+                } else {
+                  console.log(`[WAITER-DEBUG] Not enough items (${allRestaurantItems.length}) for restaurant ${restaurant}`);
+                  Alert.alert(
+                    "Waiter Mode",
+                    `Sorry, we only found ${allRestaurantItems.length} item for ${restaurant}. Waiter mode requires multiple items.`,
+                    [{ text: "OK" }]
+                  );
+                  setWaiterModeActive(false);
+                  setCurrentRestaurant(null);
+                }
+              } else {
+                console.log(`[WAITER-DEBUG] No items found for ${restaurant} in full dataset`);
+                // Fallback to current dataset items if we found some there
+                if (currentDatasetItems.length > 1) {
+                  console.log(`[WAITER-DEBUG] Falling back to ${currentDatasetItems.length} items from current dataset`);
+                  
+                  // Find the current item in the current dataset items
+                  const currentItemId = currentItem.id;
+                  const currentItemIndex = currentDatasetItems.findIndex(item => item.id === currentItemId);
+                  
+                  // Set waiter mode first was already done above - REMOVED
+                  // setWaiterModeActive(true);
+                  // setCurrentRestaurant(restaurant);
+                  
+                  if (isMountedRef.current) {
+                    // Reorder the array to make current item appear as #1
+                    let reorderedItems = [...currentDatasetItems];
+                    
+                    if (currentItemIndex !== -1) {
+                      // Move the current item to the beginning of the array
+                      const currentItemObj = reorderedItems.splice(currentItemIndex, 1)[0];
+                      reorderedItems = [currentItemObj, ...reorderedItems];
+                    }
+                    
+                    setFilteredData(reorderedItems);
+                    
+                    // Set the index to 0 only if needed
+                    if (currentIndex !== 0) {
+                      setCurrentIndex(0);
+                    }
+                  }
+                } else {
+                  Alert.alert(
+                    "Waiter Mode",
+                    `Sorry, we couldn't find enough dishes from ${restaurant}. Waiter mode requires multiple items.`,
+                    [{ text: "OK" }]
+                  );
+                  setWaiterModeActive(false);
+                  setCurrentRestaurant(null);
+                }
+              }
+            })
+            .catch(error => {
+              console.error(`[WAITER-ERROR] Failed to get items for ${restaurant}:`, error);
+              
+              // Fallback to current dataset items if we found some there
+              if (currentDatasetItems.length > 1) {
+                console.log(`[WAITER-DEBUG] Falling back to ${currentDatasetItems.length} items from current dataset after error`);
+                
+                // Find the current item in the current dataset items
+                const currentItemId = currentItem.id;
+                const currentItemIndex = currentDatasetItems.findIndex(item => item.id === currentItemId);
+                
+                // Set waiter mode first was already done - REMOVED
+                // setWaiterModeActive(true);
+                // setCurrentRestaurant(restaurant);
+                
+                if (isMountedRef.current) {
+                  // Reorder the array to make current item appear as #1
+                  let reorderedItems = [...currentDatasetItems];
+                  
+                  if (currentItemIndex !== -1) {
+                    // Move the current item to the beginning of the array
+                    const currentItemObj = reorderedItems.splice(currentItemIndex, 1)[0];
+                    reorderedItems = [currentItemObj, ...reorderedItems];
+                  }
+                  
+                  setFilteredData(reorderedItems);
+                  
+                  // Set the index to 0 only if needed
+                  if (currentIndex !== 0) {
+                    setCurrentIndex(0);
+                  }
+                }
+              } else {
+                Alert.alert(
+                  "Waiter Mode Error",
+                  `Sorry, there was a problem loading dishes from ${restaurant}.`,
+                  [{ text: "OK" }]
+                );
+                setWaiterModeActive(false);
+                setCurrentRestaurant(null);
+              }
+            })
+            .finally(() => {
+              // No need to hide loading indicator since we never showed it - REMOVED
+              // setIsFilterChanging(false);
+            });
+        } else {
+          // No callback provided, fallback to current data (limited dataset)
+          console.log(`[WAITER-DEBUG] No callback provided to get full dataset, using available data only`);
+          
+          if (currentDatasetItems.length > 1) {
+            console.log(`[WAITER-DEBUG] Activating waiter mode with ${currentDatasetItems.length} items from current dataset`);
+            
+            // Find the current item in the current dataset items
+            const currentItemId = currentItem.id;
+            const currentItemIndex = currentDatasetItems.findIndex(item => item.id === currentItemId);
+            
+            // Set waiter mode first was already done above - REMOVED
+            // setWaiterModeActive(true);
+            // setCurrentRestaurant(restaurant);
+            
+            if (isMountedRef.current) {
+              // Reorder the array to make current item appear as #1
+              let reorderedItems = [...currentDatasetItems];
+              
+              if (currentItemIndex !== -1) {
+                // Move the current item to the beginning of the array
+                const currentItemObj = reorderedItems.splice(currentItemIndex, 1)[0];
+                reorderedItems = [currentItemObj, ...reorderedItems];
+              }
+              
+              setFilteredData(reorderedItems);
+              
+              // Set the index to 0 only if needed
+              if (currentIndex !== 0) {
+                setCurrentIndex(0);
+              }
+            }
+          } else {
+            console.log(`[WAITER-DEBUG] Not enough items (${currentDatasetItems.length}) for restaurant ${restaurant} in current dataset`);
+            Alert.alert(
+              "Waiter Mode",
+              `Sorry, we only found ${currentDatasetItems.length} item for ${restaurant}. Waiter mode requires multiple items.`,
+              [{ text: "OK" }]
+            );
+            setWaiterModeActive(false);
+            setCurrentRestaurant(null);
+          }
+        }
+      }
+    } else {
+      // FIXME: SEAMLESS EXIT WITH CURRENT POSITION - Continue from current card instead of resetting
+      console.log("[WAITER-DEBUG] Deactivating waiter mode - SEAMLESS EXIT");
+      
+      // CRITICAL: Set the exiting flag to prevent the useEffect from running
+      isExitingWaiterModeRef.current = true;
+      
+      // CRITICAL: Keep track of the current visible food item
+      const currentItem = filteredData[currentIndex];
+      console.log(`[WAITER-DEBUG] Current item before deactivation: ${currentItem?.name} from ${currentItem?.restaurant}, at index ${currentIndex}`);
+      
+      // Only update the waiter mode flags
+      setWaiterModeActive(false);
+      setCurrentRestaurant(null);
+      
+      // RESTORE original data with the CURRENT card at position 0, followed by original data
+      if (preWaiterModeDataRef.current.length > 0 && currentItem) {
+        // Super simple approach:
+        // 1. Keep the current card at position 0
+        // 2. Append all items from original stack AFTER where we started waiter mode
+        
+        console.log(`[WAITER-DEBUG] Creating new card stack with current item first`);
+        
+        // Find original entry point for waiter mode - what index did we enter from?
+        // We can start from right after that point when exiting
+        const originalEntryPoint = preWaiterModeDataRef.current.findIndex(item => 
+          item.restaurant === currentItem.restaurant
+        );
+        
+        console.log(`[WAITER-DEBUG] Original entry point was index ${originalEntryPoint}`);
+        
+        // Create new data: current card + everything after original entry point
+        const newData = [
+          currentItem,
+          ...preWaiterModeDataRef.current.slice(originalEntryPoint + 1)
+        ];
+        
+        console.log(`[WAITER-DEBUG] Created new stack with ${newData.length} items`);
+        console.log(`[WAITER-DEBUG] Current card ${currentItem.name} at index 0, followed by regular cards`);
+        
+        // Set the new data and reset index to 0 to start with current card
+        setFilteredData(newData);
+        setCurrentIndex(0);
+        
+        // Reset the exitingWaiterMode flag after a short delay to ensure state updates complete
+        setTimeout(() => {
+          if (isMountedRef.current) {
+            isExitingWaiterModeRef.current = false;
+            console.log(`[WAITER-DEBUG] Exit process complete, cleared exiting flag`);
+          }
+        }, 100);
+      } else {
+        console.log(`[WAITER-DEBUG] No saved pre-waiter mode state or current item, keeping current stack`);
+        // NO state updates to filteredData or currentIndex if we don't have saved state
+        
+        // Reset the exitingWaiterMode flag immediately since we're not changing state
+        isExitingWaiterModeRef.current = false;
       }
     }
-  }, [filteredData, currentIndex]);
+  }, [filteredData, currentIndex, batchedData, selectedFilters, onRequestRestaurantItems, waiterModeActive]);
 
   // Handle camera permission and opening
   const openCamera = useCallback(async (foodItem: FoodItem) => {
@@ -830,7 +1212,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       setCameraSelectionModalVisible(false);
     }
   }, []);
-
+  
   // Handle opening the camera selection modal
   const handleCameraButtonPress = useCallback(() => {
     try {
@@ -878,8 +1260,8 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       );
     }
 
-    // Show loading indicator while filter is changing, but NOT during waiter mode toggling
-    if (isFilterChanging && !waiterModeLoading) {
+    // Show loading indicator while filter is changing, but never during waiter mode operations
+    if (isFilterChanging && !waiterModeActive) {
       return (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#FF3B5C" />
@@ -887,14 +1269,56 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       );
     }
 
+    // Safety check - ensure we have data to display
+    if (!filteredData || filteredData.length === 0 || currentIndex >= filteredData.length) {
+      return (
+        <View style={styles.loadingContainer}>
+          <Text style={styles.emptyStateText}>No dishes match your criteria</Text>
+        </View>
+      );
+    }
+
+    // Only get cards that actually exist in the filtered data
+    const visibleCards = filteredData
+      .slice(currentIndex, Math.min(currentIndex + VISIBLE_CARDS, filteredData.length));
+    
+    // Check for duplicate cards (same card shown twice in a row)
+    // This can happen in waiter mode if there are only a few items from the restaurant
+    if (visibleCards.length > 1) {
+      const currentId = visibleCards[0].id;
+      let hasDuplicate = false;
+      
+      for (let i = 1; i < visibleCards.length; i++) {
+        if (visibleCards[i].id === currentId) {
+          console.log(`Duplicate card detected: ${currentId}, card ${i}`);
+          hasDuplicate = true;
+          break;
+        }
+      }
+      
+      if (hasDuplicate) {
+        console.log("Detected duplicate cards, adjusting index");
+        // Increment index to skip the duplicate
+        setTimeout(() => {
+          if (isMountedRef.current) {
+            setCurrentIndex(prev => prev + 1);
+          }
+        }, 100);
+      }
+    }
+    
+    // In waiter mode, log info about current restaurant cards
+    if (waiterModeActive && currentRestaurant) {
+      console.log(`Displaying card ${currentIndex + 1} of ${filteredData.length} for ${currentRestaurant}`);
+    }
+
     // Show top cards in stack - reverse for correct z-index
     return (
       <Animated.View style={[{ flex: 1, alignItems: 'center', justifyContent: 'center' }, fadeAnimStyle]}>
-        {filteredData
-          .slice(currentIndex, currentIndex + 3)
+        {visibleCards
           .map((item, index) => {
             // Create consistent stable keys using the component ID and food ID
-            const uniqueKey = `${componentId}-${item.id}-${index}`;
+            const uniqueKey = `${componentId}-${item.id}-${currentIndex + index}`;
             return (
               <FoodCard
                 key={uniqueKey}
@@ -908,7 +1332,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
           .reverse()}
       </Animated.View>
     );
-  }, [currentIndex, filteredData, handleSwipe, isFinished, fadeAnimStyle, isFilterChanging, waiterModeLoading]);
+  }, [currentIndex, filteredData, handleSwipe, isFinished, fadeAnimStyle, isFilterChanging, waiterModeActive, componentId, currentRestaurant]);
 
   // Render filter modal
   const renderFilterModal = useCallback(() => {
@@ -1350,9 +1774,23 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       
       // And reset any loading states
       setIsFilterChanging(false);
-      setWaiterModeLoading(false);
     }
   }, [data, filteredData, currentIndex, fadeAnim]);
+
+  // Helper function to log current card status
+  const logCardStatus = useCallback(() => {
+    if (waiterModeActive && currentRestaurant && filteredData.length > 0) {
+      const currentPosition = currentIndex + 1;
+      console.log(`Displaying card ${currentPosition} of ${filteredData.length} for ${currentRestaurant}`);
+    }
+  }, [currentIndex, filteredData.length, waiterModeActive, currentRestaurant]);
+
+  // Effect to log card status after currentIndex changes
+  useEffect(() => {
+    if (isMountedRef.current) {
+      logCardStatus();
+    }
+  }, [currentIndex, logCardStatus]);
 
   // Simplify the renderSafeContent function to avoid hook order issues
   const renderSafeContent = () => {
