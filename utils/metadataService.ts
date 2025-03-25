@@ -13,6 +13,11 @@ interface RestaurantMetadataItem {
   postmates_url: string | null;
   doordash_url: string | null;
   uber_eats_url: string | null;
+  address: string;
+  latitude: number;
+  longitude: number;
+  price: number;
+  price_level: string;
 }
 
 // Interface for the entire metadata object
@@ -143,6 +148,9 @@ const inferFoodTypes = (menuItem: string, restaurant: string): FoodType[] => {
  * Converts a metadata item to our app's FoodItem format
  */
 const convertToFoodItem = (imagePath: string, item: RestaurantMetadataItem, index: number): FoodItem => {
+  // Debug the raw values from the metadata
+  console.log(`Raw latitude: ${item.latitude}, Raw longitude: ${item.longitude}, Raw price: ${item.price}, Raw price_level: ${item.price_level}`);
+  
   // Extract delivery services
   const deliveryServices: string[] = [];
   const deliveryUrls: { uberEats?: string; postmates?: string; doorDash?: string } = {};
@@ -161,7 +169,7 @@ const convertToFoodItem = (imagePath: string, item: RestaurantMetadataItem, inde
   }
   
   // Check for DoorDash URL
-  if (item.doordash_url && item.doordash_url !== 'null' && item.doordash_url !== 'NaN') {
+  if (item.doordash_url && item.doordash_url !== 'null' && String(item.doordash_url) !== 'NaN' && !isNaN(Number(item.doordash_url))) {
     deliveryServices.push('DoorDash');
     deliveryUrls.doorDash = item.doordash_url;
   }
@@ -188,6 +196,63 @@ const convertToFoodItem = (imagePath: string, item: RestaurantMetadataItem, inde
   
   // Generate a description
   const description = `${item.menu_item} from ${item.title}. A delicious choice for your next meal!`;
+
+  // Use price_level from metadata if available, otherwise use default based on actual price
+  let priceLevel = '$$'; // Default fallback
+  
+  // First check if price_level is NaN or a string 'NaN'
+  const isPriceLevelNaN = (String(item.price_level) === 'NaN' || 
+                          (typeof item.price_level === 'number' && isNaN(item.price_level)));
+  
+  const isPriceNaN = (String(item.price) === 'NaN' || 
+                    (typeof item.price === 'number' && isNaN(item.price)));
+                    
+  if (isPriceLevelNaN && isPriceNaN) {
+    // If both price and price_level are NaN, set to undefined so we don't display it
+    priceLevel = ''; // Use empty string instead of undefined
+  } else if (!isPriceLevelNaN && item.price_level && typeof item.price_level === 'string' && 
+      item.price_level !== 'null' && item.price_level !== 'undefined') {
+    // If it's already $ format, use it directly
+    if (item.price_level.startsWith('$')) {
+      priceLevel = item.price_level;
+    } else {
+      // Try to convert numeric price level to $ format
+      const priceLevelNum = parseInt(item.price_level, 10);
+      if (!isNaN(priceLevelNum) && priceLevelNum > 0 && priceLevelNum <= 3) {
+        priceLevel = '$'.repeat(priceLevelNum);
+      }
+    }
+  } else if (!isPriceNaN && item.price && typeof item.price === 'number') {
+    // Derive price level from actual price value
+    if (item.price < 8) {
+      priceLevel = '$';
+    } else if (item.price < 15) {
+      priceLevel = '$$';
+    } else {
+      priceLevel = '$$$';
+    }
+  }
+  
+  // Handle coordinates properly
+  let coordinates;
+  const isLatNaN = (typeof item.latitude === 'number' && isNaN(item.latitude)) || String(item.latitude) === 'NaN';
+  const isLngNaN = (typeof item.longitude === 'number' && isNaN(item.longitude)) || String(item.longitude) === 'NaN';
+  
+  if (!isLatNaN && !isLngNaN && item.latitude !== undefined && item.longitude !== undefined) {
+    coordinates = {
+      latitude: Number(item.latitude),
+      longitude: Number(item.longitude)
+    };
+  } else {
+    // Default coordinates for Westwood, LA when invalid
+    coordinates = {
+      latitude: 34.0611701,
+      longitude: -118.4462
+    };
+  }
+  
+  // Log to verify the price level and coordinates being used
+  console.log(`Item: ${item.menu_item}, Price Level: ${priceLevel}, Coordinates: ${coordinates ? `${coordinates.latitude},${coordinates.longitude}` : 'undefined'}`);
   
   return {
     id: `${index + 1}`,
@@ -195,11 +260,13 @@ const convertToFoodItem = (imagePath: string, item: RestaurantMetadataItem, inde
     description: description,
     imageUrl: item.s3_url || `${S3_BASE_URL}${imagePath}`,
     restaurant: item.title,
-    price: '$$', // Default price level since it's not in the metadata
+    price: priceLevel,
     cuisine: 'Various', // Default cuisine since it's not in the metadata
     foodType: foodTypes,
     deliveryServices: deliveryServices,
-    deliveryUrls: deliveryUrls
+    deliveryUrls: deliveryUrls,
+    address: item.address || 'Westwood, Los Angeles, CA',
+    coordinates
   };
 };
 
@@ -219,16 +286,32 @@ export const fetchRestaurantMetadata = async (): Promise<FoodItem[]> => {
     }
     
     const text = await response.text(); // Get raw text first
-    console.log('Response text (first 100 chars):', text.substring(0, 100));
+    console.log('Response text length:', text.length);
     
     try {
-      // Replace NaN with null to make it valid JSON
-      const validJsonText = text.replace(/NaN/g, 'null');
+      // Properly clean up the JSON text
+      const validJsonText = text
+        .replace(/NaN/g, 'null')  // Replace NaN with null
+        .replace(/undefined/g, 'null')  // Replace undefined with null
+        .replace(/"(\w+)":\s*,/g, '"$1": null,')  // Fix empty values
+        .replace(/,\s*}/g, '}');  // Fix trailing commas
+      
       const data = JSON.parse(validJsonText) as RestaurantMetadata;
+      
+      // Log some sample data for debugging
+      const keys = Object.keys(data);
+      if (keys.length > 0) {
+        const sampleKey = keys[0];
+        console.log('Sample item:', sampleKey, JSON.stringify(data[sampleKey]));
+      }
       
       // Convert the object to an array of FoodItems
       const foodItems: FoodItem[] = [];
       let index = 0;
+      
+      // Track issues for debugging
+      let itemsWithNoCoordinates = 0;
+      let itemsWithNoPriceLevel = 0;
       
       for (const imagePath in data) {
         if (Object.prototype.hasOwnProperty.call(data, imagePath)) {
@@ -240,10 +323,22 @@ export const fetchRestaurantMetadata = async (): Promise<FoodItem[]> => {
             continue;
           }
           
+          // Track missing data
+          if (!item.latitude || !item.longitude || isNaN(Number(item.latitude)) || isNaN(Number(item.longitude))) {
+            itemsWithNoCoordinates++;
+          }
+          
+          if (!item.price_level || item.price_level === 'null' || item.price_level === 'NaN') {
+            itemsWithNoPriceLevel++;
+          }
+          
+          // Convert and add to the list
           foodItems.push(convertToFoodItem(imagePath, item, index));
           index++;
         }
       }
+      
+      console.log(`Processed ${index} items. No coordinates: ${itemsWithNoCoordinates}, No price_level: ${itemsWithNoPriceLevel}`);
       
       // Shuffle the array to randomize the order
       const shuffledItems = shuffleArray(foodItems);

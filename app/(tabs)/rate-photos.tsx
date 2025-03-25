@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, Alert,
-  Share, Platform, Modal, FlatList, ScrollView
+  Share, Platform, Modal, FlatList, ScrollView, Image, StatusBar
 } from 'react-native';
 import { Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { FoodItem, SwipeDirection, PhotoRating } from '../../types/food';
-import { loadFoodData } from '../../data/realFoodData';
+import { FoodItem, SwipeDirection, PhotoRating, SwipeHistoryItem } from '../../types/food';
+import { loadFoodData, loadRealFoodData } from '../../data/realFoodData';
+import { foodData } from '../../data/foodData'; // Import the mock data
 import {
   savePhotoRating, filterRatedItems, clearPhotoRatings,
   loadPhotoRatings, exportRatingsToJSON, importRatingsFromJSON
@@ -34,24 +35,49 @@ export default function RatePhotosScreen() {
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      // Load all food data
-      const allFood = await loadFoodData();
+      // Load all food data with distance information
+      const allFood = await loadRealFoodData();
       
-      // Filter out already rated items
-      const unratedFood = await filterRatedItems(allFood);
-      
-      setFoodData(unratedFood);
-      setTotalPhotos(allFood.length);
-      setRatedPhotos(allFood.length - unratedFood.length);
-      setCurrentIndex(0);
-      setCanUndo(false);
-      ratingHistory.current = [];
+      if (allFood && allFood.length > 0) {
+        console.log(`Loaded ${allFood.length} items with distance info for rating`);
+        // Filter out already rated items
+        const unratedFood = await filterRatedItems(allFood);
+        
+        setFoodData(unratedFood);
+        setTotalPhotos(allFood.length);
+        setRatedPhotos(allFood.length - unratedFood.length);
+        setCurrentIndex(0);
+        setCanUndo(false);
+        ratingHistory.current = [];
+      } else {
+        console.warn('Real food data is empty, falling back to regular loadFoodData');
+        // Fall back to regular data
+        const fallbackFood = await loadFoodData();
+        const unratedFood = await filterRatedItems(fallbackFood);
+        
+        setFoodData(unratedFood);
+        setTotalPhotos(fallbackFood.length);
+        setRatedPhotos(fallbackFood.length - unratedFood.length);
+        setCurrentIndex(0);
+        setCanUndo(false);
+        ratingHistory.current = [];
+      }
       
       // Update rating stats
       updateRatingStats();
     } catch (error) {
       console.error('Error loading food data:', error);
       Alert.alert('Error', 'Failed to load food data. Please try again.');
+      
+      // Fall back to mock data as a last resort
+      try {
+        const unratedFood = await filterRatedItems(foodData);
+        setFoodData(unratedFood);
+        setTotalPhotos(foodData.length);
+        setRatedPhotos(foodData.length - unratedFood.length);
+      } catch (fallbackError) {
+        console.error('Error loading fallback data:', fallbackError);
+      }
     } finally {
       setIsLoading(false);
     }

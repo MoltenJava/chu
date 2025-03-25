@@ -14,6 +14,13 @@ export interface FoodItem {
     doorDash?: string;
   };
   rating?: PhotoRating;
+  address?: string;
+  coordinates?: {
+    latitude: number;
+    longitude: number;
+  };
+  distanceFromUser?: number;
+  estimatedDuration?: number;
 }
 
 export type FoodType = 
@@ -31,7 +38,7 @@ export type FoodType =
 
 export type PhotoRating = 'good' | 'bad' | 'meh' | null;
 
-export type SwipeDirection = 'left' | 'right' | 'up' | 'none';
+export type SwipeDirection = 'left' | 'right' | 'up' | 'down' | 'none';
 
 export interface SwipeHistoryItem {
   foodItem: FoodItem;

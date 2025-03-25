@@ -1,13 +1,13 @@
-import React, { useState, useCallback, useEffect, memo, useRef } from 'react';
-import { 
+import React, { useState, useCallback, useEffect, memo, useRef, Fragment } from 'react';
+import {
   StyleSheet, 
-  View, 
-  Text, 
-  TouchableOpacity, 
-  Dimensions, 
-  Modal, 
+  View,
+  Text,
+  TouchableOpacity,
+  Dimensions,
+  Modal,
   FlatList, 
-  Image, 
+  Image,
   SafeAreaView, 
   Platform, 
   Pressable,
@@ -22,11 +22,12 @@ import { Ionicons, FontAwesome, MaterialIcons, FontAwesome5 } from '@expo/vector
 import { FoodItem, SwipeDirection, SwipeHistoryItem, FoodType } from '../../types/food';
 import { FoodCard } from './FoodCard';
 import FoodFilter from './FoodFilter';
-import Animated, { 
-  useSharedValue, 
-  useAnimatedStyle, 
+import WaiterButton from './WaiterButton';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
   withSpring, 
-  withTiming, 
+  withTiming,
   runOnJS,
   Easing,
   interpolate,
@@ -37,9 +38,15 @@ import Animated, {
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 // Number of cards to render in the stack
-const VISIBLE_CARDS = 3;
-// Number of cards to preload beyond visible ones
-const PRELOAD_CARDS = 3;
+const VISIBLE_CARDS = 2; // Reduced from 3 to minimize render load
+// Disable preloading completely
+const PRELOAD_CARDS = 0;
+// Flag to disable preloading completely
+const DISABLE_PRELOADING = true;
+// Debug flag to enable detailed crash debugging logs
+const DEBUG_ENABLED = false;
+// Flag to disable swiping during problematic stages
+const DISABLE_SWIPE_DURING_LOAD = true;
 
 interface SwipeableCardsProps {
   data: FoodItem[];
@@ -48,19 +55,41 @@ interface SwipeableCardsProps {
   onSwipeHistoryUpdate?: (history: SwipeHistoryItem[]) => void;
 }
 
+// Centralized error logging function
+const logError = (location: string, error: any, additionalInfo: any = {}) => {
+  console.error(`[ERROR] ${location}:`, error);
+  if (Object.keys(additionalInfo).length > 0) {
+    console.error('Additional info:', additionalInfo);
+  }
+};
+
 const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   data,
   onLike,
   onDislike,
   onSwipeHistoryUpdate,
 }) => {
+  console.log('[CRASH-DEBUG] Mounting SwipeableCards component');
+  
+  // Debug flags to turn off all logging and prevent animations
+  const NO_FOOD_LOGGING = false;
+  
+  // Create a unique stable ID for this component instance to use in keys
+  const componentId = useRef(`swipe-${Date.now()}`).current;
+  
+  // Batch size constants for better performance
+  const INITIAL_BATCH_SIZE = 50;
+  const MAX_VISIBLE_ITEMS = 200;
+  
   const [currentIndex, setCurrentIndex] = useState(0);
   const [swipeHistory, setSwipeHistory] = useState<SwipeHistoryItem[]>([]);
   const [savedItems, setSavedItems] = useState<FoodItem[]>([]);
   const [savedItemsVisible, setSavedItemsVisible] = useState(false);
   const [currentRange, setCurrentRange] = useState<number>(10);
   const [selectedFilters, setSelectedFilters] = useState<FoodType[]>([]);
-  const [filteredData, setFilteredData] = useState<FoodItem[]>(data);
+  // Load only a subset of data initially
+  const [batchedData, setBatchedData] = useState<FoodItem[]>([]);
+  const [filteredData, setFilteredData] = useState<FoodItem[]>([]);
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [isFilterChanging, setIsFilterChanging] = useState(false);
   const [preloadedImages, setPreloadedImages] = useState<Set<string>>(new Set());
@@ -71,15 +100,33 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   const [favoriteItems, setFavoriteItems] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<'all' | 'favorites'>('all');
   
+  // Waiter mode state
+  const [waiterModeActive, setWaiterModeActive] = useState<boolean>(false);
+  const [currentRestaurant, setCurrentRestaurant] = useState<string | null>(null);
+  // Add waiter mode toggling loading state
+  const [waiterModeLoading, setWaiterModeLoading] = useState<boolean>(false);
+  
   // Track mounted state
   const isMountedRef = useRef(true);
   const timeoutsRef = useRef<NodeJS.Timeout[]>([]);
+  const previousDataRef = useRef<FoodItem[]>([]);
+  // Add a stabilization flag to prevent repeated rerenders
+  const initialRenderRef = useRef(true);
+  // Track if a swipe is in progress to prevent image loading
+  const isSwipingRef = useRef(false);
+  // Track the last swipe time to add delay before preloading
+  const lastSwipeTimeRef = useRef(0);
   
   // Reanimated shared values for animations
   const fadeAnim = useSharedValue(1);
   const savedBadgeScale = useSharedValue(1);
   const filterModalAnim = useSharedValue(-50);
   const mapExpandAnim = useSharedValue(0);
+
+  // Add these button animation values at the component level
+  const mapScale = useSharedValue(1);
+  const cameraScale = useSharedValue(1);
+  const profileScale = useSharedValue(1);
 
   // Filter icon data for display
   const filterIcons = {
@@ -96,13 +143,114 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     'fast-food': { icon: 'hamburger', color: '#F44336', iconFamily: 'FontAwesome5' }
   };
 
-  // Reset current index if data changes
+  // Initial data batching
   useEffect(() => {
-    setCurrentIndex(0);
+    if (data && data.length > 0) {
+      // Take only the first batch for initial render
+      const initialBatch = data.slice(0, INITIAL_BATCH_SIZE);
+      console.log(`[CRASH-DEBUG] Initializing with first ${initialBatch.length} items out of ${data.length}`);
+      setBatchedData(initialBatch);
+    }
   }, [data]);
-
-  // Cleanup animations on unmount
+  
+  // Load more data as user swipes
   useEffect(() => {
+    // If we're approaching the end of our batched data, load more
+    if (currentIndex > batchedData.length - 10 && batchedData.length < Math.min(data.length, MAX_VISIBLE_ITEMS)) {
+      const nextBatchSize = Math.min(data.length - batchedData.length, INITIAL_BATCH_SIZE);
+      
+      if (nextBatchSize > 0) {
+        console.log(`[CRASH-DEBUG] Loading next batch of ${nextBatchSize} items`);
+        const nextBatch = data.slice(batchedData.length, batchedData.length + nextBatchSize);
+        setBatchedData(prev => [...prev, ...nextBatch]);
+      }
+    }
+  }, [currentIndex, batchedData.length, data]);
+  
+  // Create refs to keep track of latest state values without causing effect reruns
+  const filteredDataRef = useRef(filteredData);
+  const currentIndexRef = useRef(currentIndex);
+
+  // Update refs when the actual state changes
+  useEffect(() => {
+    filteredDataRef.current = filteredData;
+  }, [filteredData]);
+
+  useEffect(() => {
+    currentIndexRef.current = currentIndex;
+  }, [currentIndex]);
+  
+  // Main effect for handling both waiter mode and filter changes
+  useEffect(() => {
+    // Skip if component is not mounted or during animation
+    if (!isMountedRef.current) return;
+    
+    console.log("Data filter effect running, waiter mode:", waiterModeActive, "restaurant:", currentRestaurant);
+    
+    try {
+      // Get current visible item before making any changes
+      const currentItem = filteredDataRef.current[currentIndexRef.current];
+      
+      // Create a new filtered dataset based on current conditions
+      let newFilteredData;
+      
+      // First handle waiter mode filtering
+      if (waiterModeActive && currentRestaurant) {
+        console.log("Filtering by restaurant:", currentRestaurant);
+        // Filter by current restaurant
+        newFilteredData = batchedData.filter(item => item.restaurant === currentRestaurant);
+      } else {
+        // Not in waiter mode, apply regular filters
+        if (selectedFilters.length > 0) {
+          console.log("Filtering by food types:", selectedFilters);
+          // Apply selected food type filters
+          newFilteredData = batchedData.filter(item => 
+            item.foodType.some(type => selectedFilters.includes(type))
+          );
+        } else {
+          // No filters, show all batched data
+          console.log("No filters applied, showing all data");
+          newFilteredData = [...batchedData];
+        }
+      }
+      
+      // Update filtered data with the new dataset
+      setFilteredData(newFilteredData);
+      
+      // If current item exists, try to find it in the new dataset
+      if (currentItem) {
+        const newIndex = newFilteredData.findIndex(item => item.id === currentItem.id);
+        
+        // If we can't find the item in the new dataset, reset to first item
+        if (newIndex === -1) {
+          console.log("Current item not found in new dataset, resetting to first item");
+          setCurrentIndex(0);
+        }
+        // Otherwise keep the current index (stay on the same card)
+      }
+    } catch (error) {
+      console.error("Error updating filtered data:", error);
+      
+      // Fallback to showing all batched data
+      setFilteredData(batchedData);
+    }
+    
+  }, [batchedData, selectedFilters, waiterModeActive, currentRestaurant]);
+
+  // Track mount status and initialize references
+  useEffect(() => {
+    // Set up initial value for previousDataRef
+    if (data && data.length > 0) {
+      previousDataRef.current = [...data];
+    }
+    
+    // Mark first render as complete after a delay
+    const initialRenderTimeoutId = setTimeout(() => {
+      initialRenderRef.current = false;
+    }, 100);
+    
+    timeoutsRef.current.push(initialRenderTimeoutId);
+    
     return () => {
       isMountedRef.current = false;
       
@@ -118,9 +266,28 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       // Clear the timeouts array
       timeoutsRef.current = [];
     };
-  }, []);
+  }, [data]);
+  
+  // Update currentRestaurant when currentIndex changes (for waiter mode)
+  // Completely rewritten to prevent unnecessary rerenders
+  useEffect(() => {
+    // Skip if not in waiter mode or component is not mounted
+    if (!waiterModeActive || !isMountedRef.current) return;
+    
+    // Skip if no filtered data or index out of bounds
+    if (!filteredData || filteredData.length === 0 || currentIndex >= filteredData.length) return;
+    
+    // Get the restaurant from the current item
+    const restaurant = filteredData[currentIndex]?.restaurant || null;
+    
+    // Only update if different and not already updating
+    if (restaurant !== currentRestaurant && !waiterModeLoading) {
+      // No console log here! This runs on every index change
+      setCurrentRestaurant(restaurant);
+    }
+  }, [currentIndex, waiterModeActive, waiterModeLoading, currentRestaurant, filteredData]);
 
-  // Create animated styles
+  // Create all animated styles at component level
   const fadeAnimStyle = useAnimatedStyle(() => {
     return {
       opacity: fadeAnim.value
@@ -140,16 +307,54 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   });
 
   const mapExpandAnimStyle = useAnimatedStyle(() => {
-    // Improve the opacity interpolation for smoother fade in/out
     return {
       height: mapExpandAnim.value,
       opacity: interpolate(
         mapExpandAnim.value,
-        [0, 10, 20, 80], // More gradual opacity transition
+        [0, 10, 20, 80],
         [0, 0.2, 0.6, 1],
         Extrapolate.CLAMP
       ),
       overflow: 'hidden'
+    };
+  });
+
+  const mapContentOpacityStyle = useAnimatedStyle(() => {
+    return {
+      opacity: interpolate(
+        mapExpandAnim.value,
+        [0, 20, 40, 80],
+        [0, 0.5, 0.8, 1],
+        Extrapolate.CLAMP
+      )
+    };
+  });
+
+  // Toolbar button animations
+  const mapAnimStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: mapScale.value }],
+      backgroundColor: isMapExpanded ? '#fff0f3' : 'white',
+      borderColor: isMapExpanded ? '#FF3B5C' : '#ffccd5',
+    };
+  });
+
+  const cameraAnimStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: cameraScale.value }]
+    };
+  });
+
+  const profileAnimStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: profileScale.value }]
+    };
+  });
+
+  // Map icon style
+  const mapIconStyle = useAnimatedStyle(() => {
+    return {
+      backgroundColor: isMapExpanded ? '#FF3B5C' : 'transparent',
     };
   });
 
@@ -262,92 +467,26 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     }
   }, [selectedFilters, data, fadeAnim, handleFadeOutComplete]);
 
-  // FIXED: Preload images with better error handling
-  useEffect(() => {
-    // Create a flag to track if this effect is still active
-    let isEffectActive = true;
-    let preloadTimeout: NodeJS.Timeout | null = null;
+  // Create a global debounce function for swipe handling
+  const debounce = (func: Function, wait: number) => {
+    let timeout: NodeJS.Timeout | null = null;
     
-    const preloadImages = async () => {
-      // Don't start preloading if component is unmounted
-      if (!isMountedRef.current || !isEffectActive) return;
-      
-      try {
-        // Safety check to ensure filteredData is available
-        if (!filteredData || !Array.isArray(filteredData)) {
-          console.warn('filteredData is not available or not an array');
-          return;
-        }
-
-        // Create a local copy of the current index to avoid closure issues
-        const currentIndexValue = currentIndex;
-        
-        // Create a local copy of the preloaded images set
-        const currentPreloadedImages = new Set(preloadedImages);
-
-        // Determine which images to preload
-        const endIndex = Math.min(currentIndexValue + VISIBLE_CARDS + PRELOAD_CARDS, filteredData.length);
-        const imagesToPreload = filteredData
-          .slice(currentIndexValue, endIndex)
-          .map(item => item?.imageUrl) // Use optional chaining
-          .filter(url => url && typeof url === 'string' && url.trim() !== '' && !currentPreloadedImages.has(url));
-
-        // Skip if no new images to preload
-        if (!imagesToPreload || imagesToPreload.length === 0) return;
-
-        // Mark these URLs as being preloaded - create a new Set to avoid modifying state directly
-        const newPreloadedImages = new Set([...currentPreloadedImages]);
-        
-        // Use a small delay to avoid blocking the main thread
-        preloadTimeout = setTimeout(async () => {
-          // Process each image individually to avoid Promise.all failures
-          for (const imageUrl of imagesToPreload) {
-            // Check again if component is still mounted before each image
-            if (!isMountedRef.current || !isEffectActive) return;
-            
-            if (!imageUrl || typeof imageUrl !== 'string' || imageUrl.trim() === '') continue;
-            
-            try {
-              await Image.prefetch(imageUrl);
-              
-              // Only update the set if the component is still mounted
-              if (isMountedRef.current && isEffectActive) {
-                newPreloadedImages.add(imageUrl);
-              }
-            } catch (error) {
-              console.warn(`Failed to preload image: ${imageUrl}`, error);
-              // Continue despite errors
-            }
-          }
-          
-          // Only update state if component is still mounted and there are new images
-          if (isMountedRef.current && isEffectActive && newPreloadedImages.size > currentPreloadedImages.size) {
-            setPreloadedImages(newPreloadedImages);
-          }
-        }, 50);
-        
-        // Store the timeout for cleanup
-        timeoutsRef.current.push(preloadTimeout);
-      } catch (error) {
-        console.error("Error in image preloading:", error);
-        // Don't rethrow - we want to fail gracefully
+    return (...args: any[]) => {
+      if (timeout) {
+        clearTimeout(timeout);
       }
-    };
-
-    // Start preloading
-    preloadImages();
-    
-    // Cleanup function
-    return () => {
-      isEffectActive = false;
       
-      // Clear the preload timeout if it exists
-      if (preloadTimeout) {
-        clearTimeout(preloadTimeout);
-        preloadTimeout = null;
-      }
+      timeout = setTimeout(() => {
+        func(...args);
+      }, wait);
     };
-  }, [currentIndex, filteredData, preloadedImages]);
+  };
+
+  // Error-caught preload function
+  const preloadImagesMemoized = useCallback(async () => {
+    // Do nothing - completely disabled
+    return;
+  }, []);
 
   // Handle swipe action
   const handleSwipe = useCallback((foodItem: FoodItem, direction: SwipeDirection) => {
@@ -355,14 +494,6 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     if (!isMountedRef.current) return;
     
     try {
-      // Log the original food item to see what's coming in
-      console.log('Original food item before saving:', {
-        id: foodItem.id,
-        name: foodItem.name,
-        deliveryServices: foodItem.deliveryServices,
-        deliveryUrls: foodItem.deliveryUrls
-      });
-      
       // Create a safe copy of the food item to avoid reference issues
       const safeFoodItem: FoodItem = {
         id: foodItem.id || '',
@@ -376,14 +507,6 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         deliveryServices: foodItem.deliveryServices ? [...foodItem.deliveryServices] : [],
         deliveryUrls: foodItem.deliveryUrls ? { ...foodItem.deliveryUrls } : {}
       };
-      
-      // Log the safe copy to verify it has the delivery info
-      console.log('Safe copy of food item:', {
-        id: safeFoodItem.id,
-        name: safeFoodItem.name,
-        deliveryServices: safeFoodItem.deliveryServices,
-        deliveryUrls: safeFoodItem.deliveryUrls
-      });
       
       // Create a new history item
       const historyItem: SwipeHistoryItem = {
@@ -419,13 +542,6 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       if (direction === 'right' && onLike) {
         // Update saved items - use functional update
         setSavedItems(prevItems => {
-          // Log the food item being saved
-          console.log('Saving food item with delivery info:', {
-            id: safeFoodItem.id,
-            name: safeFoodItem.name,
-            deliveryServices: safeFoodItem.deliveryServices,
-            deliveryUrls: safeFoodItem.deliveryUrls
-          });
           return [...prevItems, safeFoodItem];
         });
         
@@ -612,28 +728,42 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     });
   }, [mapExpandAnim]);
 
-  // Create a derived animated style for the content opacity
-  const mapContentOpacityStyle = useAnimatedStyle(() => {
-    return {
-      opacity: interpolate(
-        mapExpandAnim.value,
-        [0, 20, 40, 80],
-        [0, 0.5, 0.8, 1],
-        Extrapolate.CLAMP
-      )
-    };
-  });
+  // Special reset function to handle unresponsive cards
+  const resetCardStack = useCallback(() => {
+    // This function can be called when cards become unresponsive
+    if (isMountedRef.current) {
+      // Force all values to default
+      fadeAnim.value = 1;
+      setIsFilterChanging(false);
+      setWaiterModeLoading(false);
+      
+      // Ensure we can generate new cards by forcing a re-render with a key change
+      // Create a new set of filtered data with the same content
+      const resetFilteredData = [...filteredData];
+      setFilteredData(resetFilteredData);
+      
+      // If we're at a valid position, stay there, otherwise reset to beginning
+      if (currentIndex >= filteredData.length && filteredData.length > 0) {
+        setCurrentIndex(0);
+      }
+    }
+  }, [currentIndex, filteredData, fadeAnim]);
 
-  // Initialize map animation value
-  useEffect(() => {
-    // Set initial value based on isMapExpanded
-    mapExpandAnim.value = isMapExpanded ? 80 : 0;
+  // Handle waiter button press - extremely simple implementation
+  const handleWaiterButtonPress = useCallback((newIsActive: boolean) => {
+    console.log("Waiter button toggled to:", newIsActive);
     
-    // Make sure to reset the animation value when component unmounts
-    return () => {
-      mapExpandAnim.value = 0;
-    };
-  }, []);
+    // Directly set the waiter mode to the new state, no conditions
+    setWaiterModeActive(newIsActive);
+    
+    // Update restaurant only when activating waiter mode
+    if (newIsActive) {
+      const currentItem = filteredData[currentIndex];
+      if (currentItem) {
+        setCurrentRestaurant(currentItem.restaurant);
+      }
+    }
+  }, [filteredData, currentIndex]);
 
   // Handle camera permission and opening
   const openCamera = useCallback(async (foodItem: FoodItem) => {
@@ -748,8 +878,8 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       );
     }
 
-    // Show loading indicator while filter is changing
-    if (isFilterChanging) {
+    // Show loading indicator while filter is changing, but NOT during waiter mode toggling
+    if (isFilterChanging && !waiterModeLoading) {
       return (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#FF3B5C" />
@@ -757,24 +887,28 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       );
     }
 
-    // Show top 3 cards in stack - reverse for correct z-index
+    // Show top cards in stack - reverse for correct z-index
     return (
       <Animated.View style={[{ flex: 1, alignItems: 'center', justifyContent: 'center' }, fadeAnimStyle]}>
         {filteredData
           .slice(currentIndex, currentIndex + 3)
-          .map((item, index) => (
-            <FoodCard
-              key={item.id}
-              food={item}
-              onSwipe={handleSwipe}
-              isFirst={index === 0}
-              index={index}
-            />
-          ))
+          .map((item, index) => {
+            // Create consistent stable keys using the component ID and food ID
+            const uniqueKey = `${componentId}-${item.id}-${index}`;
+            return (
+              <FoodCard
+                key={uniqueKey}
+                food={item}
+                onSwipe={handleSwipe}
+                isFirst={index === 0}
+                index={index}
+              />
+            );
+          })
           .reverse()}
       </Animated.View>
     );
-  }, [currentIndex, filteredData, handleSwipe, isFinished, fadeAnimStyle, isFilterChanging]);
+  }, [currentIndex, filteredData, handleSwipe, isFinished, fadeAnimStyle, isFilterChanging, waiterModeLoading]);
 
   // Render filter modal
   const renderFilterModal = useCallback(() => {
@@ -817,7 +951,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     );
   }, [filterModalVisible, handleFilterChange, selectedFilters, filterModalAnimStyle]);
 
-  // Render app header with chewz brand, active filters, and saved items
+  // Render app header with chewz brand, waiter in middle, filter/menu on right
   const renderHeader = useCallback(() => {
     return (
       <View style={styles.headerContainer}>
@@ -827,8 +961,16 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
           </Text>
         </View>
         
+        {/* Waiter Button in the center */}
+        <View style={styles.headerCenterContainer}>
+          <WaiterButton
+            onPress={handleWaiterButtonPress}
+            isActive={waiterModeActive}
+          />
+        </View>
+        
         <View style={styles.headerRightContainer}>
-          {/* Filter Button - Now using the active filter icon */}
+          {/* Filter Button */}
           <TouchableOpacity 
             style={styles.filterButton} 
             onPress={toggleFilterModal}
@@ -872,7 +1014,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
             </View>
           </TouchableOpacity>
 
-          {/* Menu Button - Now using a food-related icon */}
+          {/* Menu Button */}
           <TouchableOpacity 
             style={styles.menuButton}
             onPress={toggleSavedItems}
@@ -890,36 +1032,10 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         </View>
       </View>
     );
-  }, [savedItems.length, toggleSavedItems, selectedFilters, toggleFilterModal, savedBadgeScaleStyle]);
+  }, [savedItems.length, toggleSavedItems, selectedFilters, toggleFilterModal, savedBadgeScaleStyle, waiterModeActive, handleWaiterButtonPress]);
 
-  // Render the bottom toolbar with three bento boxes
+  // Render the bottom toolbar with map, camera, profile buttons
   const renderBottomToolbar = useCallback(() => {
-    // Create a shared value for each button's scale for press animation
-    const mapScale = useSharedValue(1);
-    const cameraScale = useSharedValue(1);
-    const profileScale = useSharedValue(1);
-    
-    // Animated styles for button press effects
-    const mapAnimStyle = useAnimatedStyle(() => {
-      return {
-        transform: [{ scale: mapScale.value }],
-        backgroundColor: isMapExpanded ? '#fff0f3' : 'white',
-        borderColor: isMapExpanded ? '#FF3B5C' : '#ffccd5',
-      };
-    });
-    
-    const cameraAnimStyle = useAnimatedStyle(() => {
-      return {
-        transform: [{ scale: cameraScale.value }]
-      };
-    });
-    
-    const profileAnimStyle = useAnimatedStyle(() => {
-      return {
-        transform: [{ scale: profileScale.value }]
-      };
-    });
-    
     // Button press handlers with animations
     const handleMapPress = () => {
       // Animate button press
@@ -983,13 +1099,6 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       timeoutsRef.current.push(timeoutId);
     };
     
-    // Create an animated style for the map icon background
-    const mapIconStyle = useAnimatedStyle(() => {
-      return {
-        backgroundColor: isMapExpanded ? '#FF3B5C' : 'transparent',
-      };
-    });
-    
     return (
       <View style={styles.bottomToolbarContainer}>
         <View style={styles.toolbarBentoContainer}>
@@ -1009,7 +1118,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
             </TouchableOpacity>
           </Animated.View>
           
-          {/* Image Upload Button */}
+          {/* Camera Button (in middle) */}
           <Animated.View style={[styles.toolbarBentoBox, cameraAnimStyle]}>
             <TouchableOpacity 
               style={styles.toolbarBentoTouchable}
@@ -1075,7 +1184,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         </Animated.View>
       </View>
     );
-  }, [currentRange, cycleRange, isMapExpanded, toggleMapExpanded, mapExpandAnimStyle, mapContentOpacityStyle, handleCameraButtonPress]);
+  }, [currentRange, cycleRange, isMapExpanded, toggleMapExpanded, mapExpandAnimStyle, mapContentOpacityStyle, handleCameraButtonPress, mapAnimStyle, cameraAnimStyle, profileAnimStyle, mapIconStyle, mapScale, cameraScale, profileScale]);
 
   // Saved Items Modal
   const renderSavedItemsModal = () => {
@@ -1207,130 +1316,195 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     );
   };
 
-  return (
-    <GestureHandlerRootView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        {/* App Header with Chewzy Brand and Saved Items Folder */}
-        {renderHeader()}
+  // Add an effect to always ensure fadeAnim value is 1 
+  // This prevents any fade in/out loops after a swipe
+  useEffect(() => {
+    // Set fadeAnim to 1 after any currentIndex change
+    if (!initialRenderRef.current && isMountedRef.current) {
+      // Make sure it's fully visible
+      fadeAnim.value = 1;
+    }
+  }, [currentIndex, fadeAnim]);
+  
+  // Force fadeAnim to 1 when the component mounts
+  useEffect(() => {
+    // Ensure it's fully visible on mount
+    fadeAnim.value = 1;
+    
+    return () => {
+      // Also set to 1 on unmount to avoid any flashing during cleanup
+      fadeAnim.value = 1;
+    };
+  }, [fadeAnim]);
 
-        {/* Render the filter modal */}
-        {renderFilterModal()}
-
-        {/* Main Content Container */}
-        <View style={styles.mainContentContainer}>
-          {/* Display message when no items match filter */}
-          {selectedFilters.length > 0 && filteredData.length === 0 && (
-            <View style={styles.noResultsContainer}>
-              <MaterialIcons name="search-off" size={60} color="#ccc" />
-              <Text style={styles.noResultsText}>No foods match your filter</Text>
-              <Text style={styles.noResultsSubText}>Try selecting different filters</Text>
-              <TouchableOpacity 
-                style={styles.changeFilterButton}
-                onPress={toggleFilterModal}
-              >
-                <Text style={styles.changeFilterButtonText}>Change Filters</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* Cards Container */}
-          <View style={styles.cardsContainer}>
-            {renderCards()}
-          </View>
-        </View>
-        
-        {/* Bottom Toolbar with Map, Upload, and Profile */}
-        {!isFinished && renderBottomToolbar()}
-      </SafeAreaView>
+  // Add an effect to force a fresh state when the data changes significantly
+  useEffect(() => {
+    // If we have data but the component gets stuck (no items visible),
+    // this will force a reset to the initial state
+    if (data && data.length > 0 && filteredData.length > 0 && currentIndex >= filteredData.length) {
+      // Reset to the beginning
+      setCurrentIndex(0);
       
-      {/* Saved Items Modal */}
-      {renderSavedItemsModal()}
+      // Ensure animation value is reset
+      fadeAnim.value = 1;
       
-      {/* Camera Item Selection Modal */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={cameraSelectionModalVisible}
-        onRequestClose={() => setCameraSelectionModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.cameraSelectionModalContent}>
-            <View style={styles.cameraModalHeader}>
-              <Text style={styles.cameraModalTitle}>Select Food to Photograph</Text>
-              <TouchableOpacity 
-                onPress={() => setCameraSelectionModalVisible(false)} 
-                style={styles.closeModalButton}
-                hitSlop={{ top: 15, right: 15, bottom: 15, left: 15 }}
-              >
-                <Ionicons name="close" size={24} color="#555" />
-              </TouchableOpacity>
-            </View>
-            
-            <Text style={styles.cameraSelectionSubtitle}>
-              Choose which saved dish you're about to photograph
-            </Text>
-            
-            {savedItems.length > 0 ? (
-              <FlatList
-                data={savedItems}
-                keyExtractor={(item) => item.id}
-                contentContainerStyle={styles.cameraSelectionList}
-                showsVerticalScrollIndicator={false}
-                initialNumToRender={4}
-                maxToRenderPerBatch={8}
-                windowSize={5}
-                renderItem={({ item }) => (
+      // And reset any loading states
+      setIsFilterChanging(false);
+      setWaiterModeLoading(false);
+    }
+  }, [data, filteredData, currentIndex, fadeAnim]);
+
+  // Simplify the renderSafeContent function to avoid hook order issues
+  const renderSafeContent = () => {
+    if (DEBUG_ENABLED) console.log('[CRASH-DEBUG] Rendering main component');
+    
+    try {    
+      return (
+        <GestureHandlerRootView style={styles.container}>
+          <SafeAreaView style={styles.safeArea}>
+            {/* App Header with Chewzy Brand and Saved Items Folder */}
+            {renderHeader()}
+
+            {/* Render the filter modal */}
+            {renderFilterModal()}
+
+            {/* Main Content Container */}
+            <View style={styles.mainContentContainer}>
+              {/* Display message when no items match filter */}
+              {selectedFilters.length > 0 && filteredData.length === 0 && (
+                <View style={styles.noResultsContainer}>
+                  <MaterialIcons name="search-off" size={60} color="#ccc" />
+                  <Text style={styles.noResultsText}>No foods match your filter</Text>
+                  <Text style={styles.noResultsSubText}>Try selecting different filters</Text>
                   <TouchableOpacity 
-                    style={styles.cameraSelectionItem}
-                    onPress={() => openCamera(item)}
-                    activeOpacity={0.7}
+                    style={styles.changeFilterButton}
+                    onPress={toggleFilterModal}
                   >
-                    <View style={styles.cameraSelectionImageContainer}>
-                      <Image 
-                        source={{ uri: item.imageUrl }} 
-                        style={styles.cameraSelectionImage}
-                        onError={(e) => console.log('Image loading error:', e.nativeEvent.error)}
-                      />
-                      {/* Overlay for better text visibility */}
-                      <View style={styles.imageOverlay} />
-                    </View>
-                    <View style={styles.cameraSelectionInfo}>
-                      <Text style={styles.cameraSelectionName} numberOfLines={1} ellipsizeMode="tail">
-                        {item.name}
-                      </Text>
-                      <Text style={styles.cameraSelectionRestaurant} numberOfLines={1} ellipsizeMode="tail">
-                        {item.restaurant}
-                      </Text>
-                    </View>
-                    <View style={styles.cameraIconContainer}>
-                      <Ionicons name="camera" size={24} color="#FF3B5C" />
-                    </View>
+                    <Text style={styles.changeFilterButtonText}>Change Filters</Text>
                   </TouchableOpacity>
-                )}
-                ListEmptyComponent={
-                  <View style={styles.emptyListContainer}>
-                    <Text style={styles.emptyListText}>No saved dishes yet</Text>
-                  </View>
-                }
-              />
-            ) : (
-              <View style={styles.emptyListContainer}>
-                <Ionicons name="restaurant-outline" size={60} color="#ccc" />
-                <Text style={styles.emptyListText}>No saved dishes yet!</Text>
-                <Text style={styles.emptyListSubtext}>Swipe right on dishes you like to save them here</Text>
-                <TouchableOpacity 
-                  style={styles.closeButton}
-                  onPress={() => setCameraSelectionModalVisible(false)}
-                >
-                  <Text style={styles.closeButtonText}>Close</Text>
-                </TouchableOpacity>
+                </View>
+              )}
+
+              {/* Cards Container */}
+              <View style={styles.cardsContainer}>
+                {renderCards()}
               </View>
-            )}
-          </View>
-        </View>
-      </Modal>
-    </GestureHandlerRootView>
-  );
+            </View>
+            
+            {/* Bottom Toolbar with Map, Upload, and Profile */}
+            {!isFinished && renderBottomToolbar()}
+          </SafeAreaView>
+          
+          {/* Saved Items Modal */}
+          {renderSavedItemsModal()}
+          
+          {/* Camera Item Selection Modal */}
+          <Modal
+            animationType="fade"
+            transparent={true}
+            visible={cameraSelectionModalVisible}
+            onRequestClose={() => setCameraSelectionModalVisible(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={styles.cameraSelectionModalContent}>
+                <View style={styles.cameraModalHeader}>
+                  <Text style={styles.cameraModalTitle}>Select Food to Photograph</Text>
+                  <TouchableOpacity 
+                    onPress={() => setCameraSelectionModalVisible(false)} 
+                    style={styles.closeModalButton}
+                    hitSlop={{ top: 15, right: 15, bottom: 15, left: 15 }}
+                  >
+                    <Ionicons name="close" size={24} color="#555" />
+                  </TouchableOpacity>
+                </View>
+                
+                <Text style={styles.cameraSelectionSubtitle}>
+                  Choose which saved dish you're about to photograph
+                </Text>
+                
+                {savedItems.length > 0 ? (
+                  <FlatList
+                    data={savedItems}
+                    keyExtractor={(item) => item.id}
+                    contentContainerStyle={styles.cameraSelectionList}
+                    showsVerticalScrollIndicator={false}
+                    initialNumToRender={4}
+                    maxToRenderPerBatch={8}
+                    windowSize={5}
+                    renderItem={({ item }) => (
+                      <TouchableOpacity 
+                        style={styles.cameraSelectionItem}
+                        onPress={() => openCamera(item)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={styles.cameraSelectionImageContainer}>
+                          <Image 
+                            source={{ uri: item.imageUrl }} 
+                            style={styles.cameraSelectionImage}
+                            onError={(e) => {
+                              if (DEBUG_ENABLED) console.log('Image loading error:', e.nativeEvent.error);
+                            }}
+                          />
+                          {/* Overlay for better text visibility */}
+                          <View style={styles.imageOverlay} />
+                        </View>
+                        <View style={styles.cameraSelectionInfo}>
+                          <Text style={styles.cameraSelectionName} numberOfLines={1} ellipsizeMode="tail">
+                            {item.name}
+                          </Text>
+                          <Text style={styles.cameraSelectionRestaurant} numberOfLines={1} ellipsizeMode="tail">
+                            {item.restaurant}
+                          </Text>
+                        </View>
+                        <View style={styles.cameraIconContainer}>
+                          <Ionicons name="camera" size={24} color="#FF3B5C" />
+                        </View>
+                      </TouchableOpacity>
+                    )}
+                    ListEmptyComponent={
+                      <View style={styles.emptyListContainer}>
+                        <Text style={styles.emptyListText}>No saved dishes yet</Text>
+                      </View>
+                    }
+                  />
+                ) : (
+                  <View style={styles.emptyListContainer}>
+                    <Ionicons name="restaurant-outline" size={60} color="#ccc" />
+                    <Text style={styles.emptyListText}>No saved dishes yet!</Text>
+                    <Text style={styles.emptyListSubtext}>Swipe right on dishes you like to save them here</Text>
+                    <TouchableOpacity 
+                      style={styles.closeButton}
+                      onPress={() => setCameraSelectionModalVisible(false)}
+                    >
+                      <Text style={styles.closeButtonText}>Close</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            </View>
+          </Modal>
+        </GestureHandlerRootView>
+      );
+    } catch (error) {
+      if (DEBUG_ENABLED) console.error('[CRASH-DEBUG] Error in mainRender:', error);
+      logError('mainRender', error);
+      
+      // Return a simple error fallback UI
+      return (
+        <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+          <Text style={{ fontSize: 18, color: '#FF3B5C', marginBottom: 20 }}>
+            App crashed. Please restart.
+          </Text>
+          <Text style={{ fontSize: 14, color: '#555', marginBottom: 30, textAlign: 'center' }}>
+            We're sorry for the inconvenience.{'\n'}The app encountered an error while displaying food cards.
+          </Text>
+        </SafeAreaView>
+      );
+    }
+  };
+
+  // Update the main component return to use renderSafeContent directly
+  return renderSafeContent();
 };
 
 const styles = StyleSheet.create({
@@ -1356,6 +1530,11 @@ const styles = StyleSheet.create({
   headerLeftContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  headerCenterContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   headerRightContainer: {
     flexDirection: 'row',
@@ -1389,6 +1568,12 @@ const styles = StyleSheet.create({
     elevation: 3,
     borderWidth: 1,
     borderColor: '#ffccd5',
+  },
+  filterButtonContainerActive: {
+    borderColor: '#FF3B5C',
+    backgroundColor: '#fff0f3',
+    shadowColor: '#FF3B5C',
+    shadowOpacity: 0.25,
   },
   menuButton: {
     width: 40,
@@ -1976,6 +2161,79 @@ const styles = StyleSheet.create({
   savedItemsList: {
     paddingHorizontal: 10,
     paddingBottom: 20,
+  },
+  restaurantIndicatorContainer: {
+    backgroundColor: '#4CAF50',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    marginLeft: 10,
+  },
+  restaurantIndicatorText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  // Add these missing styles for error handling
+  noDataContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+  },
+  noDataText: {
+    fontSize: 18,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  noMoreCardsContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+  },
+  noMoreCardsText: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+  },
+  errorText: {
+    fontSize: 18,
+    color: '#FF3B5C',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  retryButton: {
+    paddingHorizontal: 30,
+    paddingVertical: 12,
+    backgroundColor: '#FF3B5C',
+    borderRadius: 25,
+  },
+  retryButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: 'white',
+  },
+  cardsAnimatedContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 5,
+    paddingTop: 5,
+  },
+  cardWrapper: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
 

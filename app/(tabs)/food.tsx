@@ -1,10 +1,48 @@
-import React, { useState, useCallback, memo, useEffect } from 'react';
+import React, { useState, useCallback, memo, useEffect, ReactNode } from 'react';
 import { StyleSheet, View, StatusBar as RNStatusBar, Platform, ActivityIndicator, Text } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { foodData } from '../../data/foodData'; // Keep as fallback
-import { loadFoodData } from '../../data/realFoodData'; // Import our new data source
-import { SwipeableCards } from '../../components/food/SwipeableCards';
+import { loadFoodData, loadRealFoodData } from '../../data/realFoodData'; // Import our new data source
+import { SwipeableCards } from '../../../chu/components/food/SwipeableCards';
 import { FoodItem, SwipeHistoryItem } from '../../types/food';
+
+// Simple Error Boundary component to catch and handle rendering errors gracefully
+interface ErrorBoundaryProps {
+  children: ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+}
+
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    // Update state so the next render will show the fallback UI
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+    // Log the error to an error reporting service
+    console.error("Component error:", error, errorInfo);
+  }
+
+  render(): ReactNode {
+    if (this.state.hasError) {
+      // Render fallback UI
+      return (
+        <View style={[styles.container, styles.centerContent]}>
+          <StatusBar style="dark" />
+          <Text style={styles.errorText}>Something went wrong</Text>
+          <Text style={styles.loadingText}>Please restart the app</Text>
+        </View>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 const FoodScreen: React.FC = () => {
   const [likedFood, setLikedFood] = useState<FoodItem[]>([]);
@@ -20,8 +58,18 @@ const FoodScreen: React.FC = () => {
         setIsLoading(true);
         setError(null);
         
-        const data = await loadFoodData();
-        setFoodItems(data);
+        // Use loadRealFoodData to get distance information
+        const data = await loadRealFoodData();
+        
+        if (data && data.length > 0) {
+          console.log(`Loaded ${data.length} items with distance info`);
+          console.log(`Sample item: ${JSON.stringify(data[0])}`);
+          setFoodItems(data);
+        } else {
+          console.warn('Real food data is empty, falling back to regular loadFoodData');
+          const fallbackData = await loadFoodData();
+          setFoodItems(fallbackData);
+        }
       } catch (err) {
         console.error('Error loading food data:', err);
         setError('Failed to load food data. Please try again later.');
@@ -74,12 +122,14 @@ const FoodScreen: React.FC = () => {
     <View style={styles.container}>
       <StatusBar style="dark" />
       
-      <SwipeableCards
-        data={foodItems}
-        onLike={handleLike}
-        onDislike={handleDislike}
-        onSwipeHistoryUpdate={handleSwipeHistoryUpdate}
-      />
+      <ErrorBoundary>
+        <SwipeableCards
+          data={foodItems}
+          onLike={handleLike}
+          onDislike={handleDislike}
+          onSwipeHistoryUpdate={handleSwipeHistoryUpdate}
+        />
+      </ErrorBoundary>
     </View>
   );
 };

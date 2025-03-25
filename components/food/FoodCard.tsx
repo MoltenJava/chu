@@ -1,8 +1,8 @@
-import React, { useState, memo, useCallback, useEffect, useRef, useMemo } from 'react';
-import { StyleSheet, View, Text, Image, Dimensions, Platform, Modal, TouchableOpacity, Pressable, ViewStyle } from 'react-native';
-import { PanGestureHandler, GestureHandlerRootView } from 'react-native-gesture-handler';
-import { Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { FoodItem, SwipeDirection } from '../../types/food';
+import React, { useState, memo, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from 'react';
+import { StyleSheet, View, Text, Image, Dimensions, Platform, Modal, TouchableOpacity, Pressable, ViewStyle, ActivityIndicator, LayoutChangeEvent } from 'react-native';
+import { PanGestureHandler, PanGestureHandlerGestureEvent } from 'react-native-gesture-handler';
+import { Ionicons, MaterialIcons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
+import { FoodItem, SwipeDirection, FoodType } from '../../types/food';
 import * as Haptics from 'expo-haptics';
 import { PLACEHOLDER_IMAGE, handleImageError } from '../../utils/imageUtils';
 import Animated, { 
@@ -14,7 +14,8 @@ import Animated, {
   runOnJS,
   interpolate,
   Extrapolate,
-  useAnimatedReaction
+  useAnimatedReaction,
+  useDerivedValue
 } from 'react-native-reanimated';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -35,7 +36,124 @@ interface FoodCardProps {
   index: number;
 }
 
-const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, index }) => {
+// Debug flag - sync with SwipeableCards
+const DEBUG_ENABLED = true;
+
+// Centralized error logging function
+const logError = (location: string, error: any, additionalInfo: any = {}) => {
+  if (DEBUG_ENABLED) {
+    console.error(`[FOOD-CARD-DEBUG] Error in ${location}:`, error);
+    console.log(`[FOOD-CARD-DEBUG] Additional info:`, additionalInfo);
+    
+    // Log stack trace if available
+    if (error?.stack) {
+      console.log(`[FOOD-CARD-DEBUG] Stack trace:`, error.stack);
+    }
+  }
+};
+
+// Helper function to format distance
+const formatDistance = (distance?: number): string => {
+  if (distance === undefined) return '';
+  
+  if (distance < 0.1) {
+    // Convert to feet (1 mile = 5280 feet)
+    const feet = Math.round(distance * 5280);
+    return `${feet} ft`;
+  }
+  
+  if (distance < 1) {
+    // Show as fraction of a mile
+    return `${distance.toFixed(1)} mi`;
+  }
+  
+  // Round to nearest mile for distances > 1 mile
+  return `${Math.round(distance)} mi`;
+};
+
+// Helper function to format duration
+const formatDuration = (seconds?: number): string => {
+  if (seconds === undefined) return '';
+  
+  const minutes = Math.round(seconds / 60);
+  
+  if (minutes < 1) return 'Under 1 min';
+  if (minutes === 1) return '1 min';
+  if (minutes < 60) return `${minutes} min`;
+  
+  const hours = Math.floor(minutes / 60);
+  const remainingMins = minutes % 60;
+  
+  if (remainingMins === 0) return `${hours} hr`;
+  return `${hours}h ${remainingMins}m`;
+};
+
+// Create a better formatPriceLevel function that maintains the beautiful $ circles
+const formatPriceLevel = (price?: string): { display: string; level: number } => {
+  if (!price || price.trim() === '') return { display: '$$', level: 2 }; // Default
+  
+  // If price is already formatted as $ or $$ or $$$, convert to level
+  if (/^[\$]+$/.test(price)) {
+    return { display: price, level: price.length };
+  }
+  
+  // Additional check for "$" prefix but with numbers (e.g., "$2")
+  if (price.startsWith('$') && price.length > 1) {
+    const numAfterDollar = parseInt(price.substring(1), 10);
+    if (!isNaN(numAfterDollar) && numAfterDollar > 0 && numAfterDollar <= 3) {
+      return { display: '$'.repeat(numAfterDollar), level: numAfterDollar };
+    }
+  }
+  
+  // If it's a number as string, convert to appropriate number of $ symbols
+  const numValue = parseInt(price, 10);
+  if (!isNaN(numValue) && numValue > 0 && numValue <= 3) {
+    return { display: '$'.repeat(numValue), level: numValue };
+  }
+  
+  // For actual dollar amounts (e.g., "12.99"), convert to price level
+  const floatValue = parseFloat(price);
+  if (!isNaN(floatValue)) {
+    if (floatValue < 8) return { display: '$', level: 1 };
+    if (floatValue < 15) return { display: '$$', level: 2 };
+    return { display: '$$$', level: 3 };
+  }
+  
+  return { display: '$$', level: 2 }; // Default if not matching expected formats
+};
+
+// Define the ref type for FoodCard
+export interface FoodCardRef {
+  reset: () => void;
+  like: () => void;
+  nope: () => void;
+  meh: () => void;
+  swipeLocked: () => boolean;
+}
+
+const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) => {
+  const { food, onSwipe, isFirst, index } = props;
+  
+  // Ensure food object is properly validated with defaults
+  const validatedFood = useMemo(() => {
+    return {
+      ...food,
+      name: food.name || 'Untitled Food',
+      description: food.description || 'No description available',
+      imageUrl: food.imageUrl || 'https://via.placeholder.com/400',
+      restaurant: food.restaurant || 'Unknown Restaurant',
+      price: food.price || '$$',
+      cuisine: food.cuisine || 'Various',
+      foodType: Array.isArray(food.foodType) && food.foodType.length > 0 
+        ? food.foodType as FoodType[] 
+        : ['comfort' as FoodType],
+      deliveryServices: Array.isArray(food.deliveryServices) ? food.deliveryServices : [],
+      deliveryUrls: food.deliveryUrls || {},
+      address: food.address || '',
+      coordinates: food.coordinates || { latitude: 0, longitude: 0 }
+    };
+  }, [food]);
+  
   const [detailsVisible, setDetailsVisible] = useState(false);
   const [isSwiping, setIsSwiping] = useState(false);
   const [showLikeIndicator, setShowLikeIndicator] = useState(false);
@@ -44,13 +162,21 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
   const [likeOpacity, setLikeOpacity] = useState(0);
   const [nopeOpacity, setNopeOpacity] = useState(0);
   const [mehOpacity, setMehOpacity] = useState(0);
+  const [distanceInfo, setDistanceInfo] = useState({
+    distance: food.distanceFromUser,
+    duration: food.estimatedDuration
+  });
   
   const isMountedRef = useRef(true);
+  const gestureEnabledRef = useRef(true);
+  const swipeLockRef = useRef(false);
   
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
   const cardOpacity = useSharedValue(1);
   const cardScale = useSharedValue(1);
+  const rotate = useSharedValue(0);
+  const zIndex = useSharedValue(100 - index);
   
   const socialProofData = useRef({
     isTrending: food.id.charCodeAt(0) % 3 === 0,
@@ -58,6 +184,9 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
     isLimitedTime: food.id.charCodeAt(0) % 5 === 0,
     availableUntil: food.id.charCodeAt(0) % 5 === 0 ? `${Math.floor(Math.random() * 3) + 6}PM` : null
   }).current;
+
+  // Format the price for display - get both display format and level
+  const priceInfo = formatPriceLevel(validatedFood.price);
 
   useAnimatedReaction(
     () => {
@@ -107,6 +236,18 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
   );
 
   useEffect(() => {
+    if (isMountedRef.current && (
+      food.distanceFromUser !== distanceInfo.distance || 
+      food.estimatedDuration !== distanceInfo.duration
+    )) {
+      setDistanceInfo({
+        distance: food.distanceFromUser,
+        duration: food.estimatedDuration
+      });
+    }
+  }, [food.distanceFromUser, food.estimatedDuration, food.name]);
+
+  useEffect(() => {
     return () => {
       isMountedRef.current = false;
     };
@@ -124,37 +265,173 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
     }
   }, []);
 
-  const handleSwipeComplete = useCallback((foodItem: FoodItem, direction: SwipeDirection) => {
+  const resetCard = useCallback(() => {
     if (!isMountedRef.current) return;
     
+    translateX.value = withSpring(0, {
+      damping: 15,
+      stiffness: 150
+    });
+    translateY.value = withSpring(0, {
+      damping: 15,
+      stiffness: 150
+    });
+    
+    swipeLockRef.current = false;
+    
+    if (isMountedRef.current) {
+      setIsSwiping(false);
+      setShowLikeIndicator(false);
+      setShowNopeIndicator(false);
+      setShowMehIndicator(false);
+      setLikeOpacity(0);
+      setNopeOpacity(0);
+      setMehOpacity(0);
+    }
+  }, [translateX, translateY]);
+
+  const safeExecuteSwipe = useCallback((food: FoodItem, direction: SwipeDirection) => {
     try {
-      if (!foodItem || !foodItem.id) {
-        console.warn("Invalid food item in handleSwipeComplete");
-        return;
-      }
-      
-      const safeFood = {...foodItem};
-      
       setTimeout(() => {
-        if (isMountedRef.current) {
-          onSwipe(safeFood, direction);
-        }
-      }, 0);
+        if (!isMountedRef.current) return;
+        
+        const simpleFoodItem: FoodItem = {
+          id: food.id,
+          name: food.name,
+          imageUrl: food.imageUrl,
+          restaurant: food.restaurant,
+          price: food.price,
+          cuisine: food.cuisine,
+          description: food.description,
+          foodType: [...(food.foodType || [])],
+          deliveryServices: [...(food.deliveryServices || [])],
+          deliveryUrls: { ...food.deliveryUrls }
+        };
+        
+        onSwipe(simpleFoodItem, direction);
+      }, 100);
     } catch (error) {
-      console.error("Error in handleSwipeComplete:", error);
+      // Remove console error that could impact performance
+      // console.error('Error during swipe execution:', error);
+    } finally {
+      if (isMountedRef.current) {
+        swipeLockRef.current = false;
+      }
     }
   }, [onSwipe]);
 
+  const animatedCardStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      { scale: cardScale.value },
+      { rotate: `${rotate.value}deg` },
+    ],
+    opacity: cardOpacity.value,
+    zIndex: isFirst ? 100 : zIndex.value,
+  }));
+
+  const gestureHandler = useAnimatedGestureHandler<
+    PanGestureHandlerGestureEvent,
+    { startX: number; startY: number }
+  >({
+    onStart: (_event, context) => {
+      // Record starting position
+      context.startX = translateX.value;
+      context.startY = translateY.value;
+    },
+    
+    onActive: (event, context) => {
+      // Update position based on gesture - keep it simple
+      translateX.value = context.startX + event.translationX;
+      translateY.value = context.startY + event.translationY;
+      
+      // Calculate rotation based on horizontal translation (simple)
+      rotate.value = (translateX.value / SCREEN_WIDTH) * 20;
+    },
+    
+    onEnd: (event) => {
+      // Simple threshold for completing swipe
+      if (Math.abs(translateX.value) > SWIPE_THRESHOLD) {
+        // Get direction
+        const direction: SwipeDirection = translateX.value > 0 ? 'right' : 'left';
+        
+        // Complete swipe with animation
+        translateX.value = withTiming(
+          direction === 'right' ? SCREEN_WIDTH * 1.5 : -SCREEN_WIDTH * 1.5, 
+          { duration: 250 },
+          () => {
+            runOnJS(safeExecuteSwipe)(validatedFood, direction);
+          }
+        );
+      } else {
+        // Reset position if not swiped far enough
+        translateX.value = withSpring(0);
+        translateY.value = withSpring(0);
+        rotate.value = withSpring(0);
+      }
+    },
+    
+    onCancel: () => {
+      // Reset position
+      translateX.value = withSpring(0);
+      translateY.value = withSpring(0);
+      rotate.value = withSpring(0);
+    },
+  });
+
+  const handleLike = useCallback(() => {
+    if (!isFirst || swipeLockRef.current) return;
+    
+    swipeLockRef.current = true;
+    setIsSwiping(true);
+    setShowLikeIndicator(true);
+    setLikeOpacity(1);
+    
+    translateX.value = withTiming(SCREEN_WIDTH * 1.5, { duration: 300 }, () => {
+      runOnJS(safeExecuteSwipe)(validatedFood, 'right');
+    });
+  }, [validatedFood, translateX, safeExecuteSwipe, isFirst]);
+
+  const handleNope = useCallback(() => {
+    if (!isFirst || swipeLockRef.current) return;
+    
+    swipeLockRef.current = true;
+    setIsSwiping(true);
+    setShowNopeIndicator(true);
+    setNopeOpacity(1);
+    
+    translateX.value = withTiming(-SCREEN_WIDTH * 1.5, { duration: 300 }, () => {
+      runOnJS(safeExecuteSwipe)(validatedFood, 'left');
+    });
+  }, [validatedFood, translateX, safeExecuteSwipe, isFirst]);
+
+  const handleMeh = useCallback(() => {
+    if (!isFirst || swipeLockRef.current) return;
+    
+    swipeLockRef.current = true;
+    setIsSwiping(true);
+    setShowMehIndicator(true);
+    setMehOpacity(1);
+    
+    translateY.value = withTiming(SCREEN_HEIGHT, { duration: 300 }, () => {
+      runOnJS(safeExecuteSwipe)(validatedFood, 'down');
+    });
+  }, [validatedFood, translateY, safeExecuteSwipe, isFirst]);
+
   const CardContent = useMemo(() => {
+    const currentDistance = distanceInfo.distance;
+    const currentDuration = distanceInfo.duration;
+    
     return (
       <>
         <View style={styles.imageContainer}>
           <Image
-            source={{ uri: food.imageUrl }}
+            source={{ uri: validatedFood.imageUrl }}
             style={styles.image}
             resizeMode="cover"
             defaultSource={PLACEHOLDER_IMAGE}
-            onError={(e) => handleImageError(food.imageUrl, e.nativeEvent.error)}
+            onError={(e) => handleImageError(validatedFood.imageUrl, e.nativeEvent.error)}
           />
 
           <View style={styles.socialProofContainer}>
@@ -189,208 +466,211 @@ const FoodCardComponent: React.FC<FoodCardProps> = ({ food, onSwipe, isFirst, in
 
         <View style={styles.cardContent}>
           <Text style={styles.name} numberOfLines={2} ellipsizeMode="tail">
-            {food.name}
+            {validatedFood.name}
           </Text>
+          
           <View style={styles.detailsRow}>
             <Text style={styles.restaurant} numberOfLines={1} ellipsizeMode="tail">
-              {food.restaurant}
+              {validatedFood.restaurant}
             </Text>
-            <Text style={styles.price}>
-              {food.price}
-            </Text>
+          </View>
+          
+          <View style={styles.metadataRow}>
+            {/* Price indicator with circles */}
+            {validatedFood.price && validatedFood.price.trim() !== '' && (
+              <View style={styles.priceContainer}>
+                <View style={styles.priceDotContainer}>
+                  <View style={[styles.priceDot, priceInfo.level >= 1 ? styles.priceDotFilled : styles.priceDotEmpty]} />
+                  <View style={[styles.priceDot, priceInfo.level >= 2 ? styles.priceDotFilled : styles.priceDotEmpty]} />
+                  <View style={[styles.priceDot, priceInfo.level >= 3 ? styles.priceDotFilled : styles.priceDotEmpty]} />
+                </View>
+                <Text style={styles.priceText}>{priceInfo.display}</Text>
+              </View>
+            )}
+            
+            {/* Distance info */}
+            {validatedFood.coordinates && currentDistance !== undefined && (
+              <View style={styles.distanceInfoContainer}>
+                <View style={styles.distanceItem}>
+                  <FontAwesome5 name="map-marker-alt" size={14} color="#FF3B5C" />
+                  <Text style={styles.distanceText}>
+                    {formatDistance(currentDistance)}
+                  </Text>
+                </View>
+                
+                {currentDuration !== undefined && (
+                  <View style={styles.distanceItem}>
+                    <MaterialIcons name="access-time" size={14} color="#FF3B5C" />
+                    <Text style={styles.distanceText}>
+                      {formatDuration(currentDuration)}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
+            
+            {/* Loading indicator for distance */}
+            {validatedFood.coordinates && currentDistance === undefined && (
+              <View style={styles.distanceInfoContainer}>
+                <View style={styles.distanceItem}>
+                  <FontAwesome5 name="map-marker-alt" size={14} color="#FF3B5C" />
+                  <Text style={styles.distanceTextCalculating}>
+                    <ActivityIndicator size="small" color="#FF3B5C" style={styles.smallLoader} /> 
+                    Calculating...
+                  </Text>
+                </View>
+              </View>
+            )}
           </View>
         </View>
       </>
     );
-  }, [food.id, food.imageUrl, food.name, food.restaurant, food.price, socialProofData, toggleDetails]);
+  }, [validatedFood, socialProofData, toggleDetails, priceInfo, distanceInfo]);
 
-  const animatedCardStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { translateX: translateX.value },
-        { translateY: translateY.value },
-        { scale: cardScale.value },
-        { 
-          rotate: `${interpolate(
-            translateX.value,
-            [-SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 2],
-            [-8, 0, 8],
-            Extrapolate.CLAMP
-          )}deg` 
-        }
-      ],
-      opacity: cardOpacity.value,
-      zIndex: isFirst ? 10 : 10 - index,
-      position: 'absolute',
-    };
-  });
+  const renderDetailsModal = () => (
+    <Modal
+      visible={detailsVisible}
+      transparent={true}
+      animationType="slide"
+      onRequestClose={closeDetails}
+    >
+      <Pressable style={styles.modalOverlay} onPress={closeDetails}>
+        <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>{validatedFood.name}</Text>
+            <Ionicons name="close" size={24} color="#333" onPress={closeDetails} />
+          </View>
 
-  const gestureHandler = useAnimatedGestureHandler({
-    onStart: (_, ctx: GestureContext) => {
-      ctx.startX = translateX.value;
-      ctx.startY = translateY.value;
-    },
-    onActive: (event, ctx) => {
-      if (!isFirst) return;
-      
-      translateX.value = ctx.startX + event.translationX;
-      translateY.value = ctx.startY + event.translationY;
-      
-      if (Math.abs(event.translationX) > 10 || Math.abs(event.translationY) > 10) {
-        runOnJS(setIsSwiping)(true);
-      }
-    },
-    onEnd: (event) => {
-      if (!isFirst) return;
-      
-      let direction: SwipeDirection = 'none';
-      
-      if (event.translationX > SWIPE_THRESHOLD) {
-        direction = 'right';
-      } else if (event.translationX < -SWIPE_THRESHOLD) {
-        direction = 'left';
-      } else if (event.translationY < -SWIPE_THRESHOLD) {
-        direction = 'up';
-      }
-      
-      if (direction !== 'none') {
-        if (direction === 'up') {
-          translateY.value = withTiming(
-            -SCREEN_HEIGHT * 1.2,
-            { duration: 250 },
-            () => {
-              runOnJS(handleSwipeComplete)(food, direction);
-            }
-          );
-        } else {
-          translateX.value = withTiming(
-            direction === 'right' ? SCREEN_WIDTH * 1.2 : -SCREEN_WIDTH * 1.2,
-            { duration: 250 },
-            () => {
-              runOnJS(handleSwipeComplete)(food, direction);
-            }
-          );
-          
-          translateY.value = withTiming(
-            direction === 'right' ? 30 : -30,
-            { duration: 250 }
-          );
-        }
-      } else {
-        translateX.value = withSpring(0, { damping: 15 });
-        translateY.value = withSpring(0, { damping: 15 });
-      }
-      
-      runOnJS(setIsSwiping)(false);
-    },
-  });
+          <Image
+            source={{ uri: validatedFood.imageUrl }}
+            style={styles.modalImage}
+            resizeMode="cover"
+            defaultSource={PLACEHOLDER_IMAGE}
+          />
+
+          <View style={styles.modalDetailsContainer}>
+            <View style={styles.modalDetailRow}>
+              <Text style={styles.modalDetailLabel}>Restaurant:</Text>
+              <Text style={styles.modalDetailText}>{validatedFood.restaurant}</Text>
+            </View>
+
+            {validatedFood.price && validatedFood.price.trim() !== '' && (
+              <View style={styles.modalDetailRow}>
+                <Text style={styles.modalDetailLabel}>Price:</Text>
+                <View style={styles.modalPriceContainer}>
+                  <View style={styles.priceDotContainer}>
+                    <View style={[styles.priceDot, priceInfo.level >= 1 ? styles.priceDotFilled : styles.priceDotEmpty]} />
+                    <View style={[styles.priceDot, priceInfo.level >= 2 ? styles.priceDotFilled : styles.priceDotEmpty]} />
+                    <View style={[styles.priceDot, priceInfo.level >= 3 ? styles.priceDotFilled : styles.priceDotEmpty]} />
+                  </View>
+                  <Text style={styles.modalPriceText}>{priceInfo.display}</Text>
+                </View>
+              </View>
+            )}
+
+            {validatedFood.address && (
+              <View style={styles.modalDetailRow}>
+                <Text style={styles.modalDetailLabel}>Address:</Text>
+                <Text style={styles.modalDetailText}>{validatedFood.address}</Text>
+              </View>
+            )}
+
+            {validatedFood.coordinates && distanceInfo.distance !== undefined && (
+              <View style={styles.modalDetailRow}>
+                <Text style={styles.modalDetailLabel}>Distance:</Text>
+                <View style={styles.modalDistanceContainer}>
+                  <FontAwesome5 name="map-marker-alt" size={14} color="#FF3B5C" style={{marginRight: 4}} />
+                  <Text style={styles.modalDistanceText}>{formatDistance(distanceInfo.distance)}</Text>
+                </View>
+              </View>
+            )}
+
+            {validatedFood.coordinates && distanceInfo.duration !== undefined && (
+              <View style={styles.modalDetailRow}>
+                <Text style={styles.modalDetailLabel}>Est. Travel Time:</Text>
+                <View style={styles.modalDistanceContainer}>
+                  <MaterialIcons name="access-time" size={14} color="#FF3B5C" style={{marginRight: 4}} />
+                  <Text style={styles.modalDistanceText}>{formatDuration(distanceInfo.duration)}</Text>
+                </View>
+              </View>
+            )}
+
+            <View style={styles.modalDetailRow}>
+              <Text style={styles.modalDetailLabel}>Food Type:</Text>
+              <Text style={styles.modalDetailText}>{validatedFood.foodType.join(', ')}</Text>
+            </View>
+
+            <View style={styles.modalDetailRow}>
+              <Text style={styles.modalDetailLabel}>Description:</Text>
+              <Text style={styles.modalDetailText}>{validatedFood.description}</Text>
+            </View>
+
+            <View style={styles.deliveryOptions}>
+              <Text style={styles.modalDetailLabel}>Order on:</Text>
+              <View style={styles.deliveryButtons}>
+                {validatedFood.deliveryServices?.map((service, idx) => (
+                  <TouchableOpacity
+                    key={idx}
+                    style={styles.deliveryButton}
+                    onPress={() => {
+                      // Handle delivery service button press
+                      let url;
+                      if (service === 'UberEats' && validatedFood.deliveryUrls?.uberEats) {
+                        url = validatedFood.deliveryUrls.uberEats;
+                      } else if (service === 'DoorDash' && validatedFood.deliveryUrls?.doorDash) {
+                        url = validatedFood.deliveryUrls.doorDash;
+                      } else if (service === 'Postmates' && validatedFood.deliveryUrls?.postmates) {
+                        url = validatedFood.deliveryUrls.postmates;
+                      }
+
+                      if (url) {
+                        // Implement opening URL functionality
+                        // console.log(`Opening ${service} URL: ${url}`);
+                      }
+                    }}
+                  >
+                    <Text style={styles.deliveryButtonText}>{service}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </View>
+        </View>
+      </Pressable>
+    </Modal>
+  );
+
+  React.useImperativeHandle(
+    ref,
+    () => ({
+      reset: resetCard,
+      like: handleLike,
+      nope: handleNope,
+      meh: handleMeh,
+      swipeLocked: () => swipeLockRef.current
+    })
+  );
 
   return (
     <>
-      <PanGestureHandler enabled={isFirst} onGestureEvent={gestureHandler}>
+      <PanGestureHandler onGestureEvent={gestureHandler} enabled={isFirst && gestureEnabledRef.current}>
         <Animated.View style={[styles.card, animatedCardStyle]}>
           {CardContent}
-          {showLikeIndicator && (
-            <View style={[styles.likeContainer, { opacity: likeOpacity }]}>
-              <Text style={styles.likeText}>LIKE</Text>
-            </View>
-          )}
-          
-          {showNopeIndicator && (
-            <View style={[styles.nopeContainer, { opacity: nopeOpacity }]}>
-              <Text style={styles.nopeText}>NOPE</Text>
-            </View>
-          )}
-          
-          {showMehIndicator && (
-            <View style={[styles.mehContainer, { opacity: mehOpacity }]}>
-              <Text style={styles.mehText}>MEH</Text>
-            </View>
-          )}
+          {showLikeIndicator && <View style={[styles.likeIndicator, { opacity: likeOpacity }]}>
+            <Text style={styles.indicatorText}>LIKE</Text>
+          </View>}
+          {showNopeIndicator && <View style={[styles.nopeIndicator, { opacity: nopeOpacity }]}>
+            <Text style={styles.indicatorText}>NOPE</Text>
+          </View>}
+          {showMehIndicator && <View style={[styles.mehIndicator, { opacity: mehOpacity }]}>
+            <Text style={styles.indicatorText}>MEH</Text>
+          </View>}
         </Animated.View>
       </PanGestureHandler>
-
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={detailsVisible}
-        onRequestClose={closeDetails}
-      >
-        <Pressable style={styles.modalOverlay} onPress={closeDetails}>
-          <Pressable style={styles.modalContent} onPress={e => e.stopPropagation()}>
-            <Image 
-              source={{ uri: food.imageUrl }} 
-              style={styles.modalImage}
-              resizeMode="cover"
-              defaultSource={PLACEHOLDER_IMAGE}
-              onError={(e) => handleImageError(food.imageUrl, e.nativeEvent.error)}
-            />
-            
-            <View style={styles.modalInfoContainer}>
-              <Text style={styles.modalName}>{food.name}</Text>
-              <Text style={styles.modalRestaurant}>{food.restaurant} • {food.price}</Text>
-              <Text style={styles.modalCuisine}>{food.cuisine}</Text>
-              <Text style={styles.modalDescription}>{food.description}</Text>
-              
-              <View style={styles.deliveryOptions}>
-                {food.deliveryServices && food.deliveryServices.length > 0 ? (
-                  food.deliveryServices.map((service, index) => {
-                    let iconName: any = 'car-outline';
-                    let iconColor = '#FF5A5F';
-                    let serviceName = service;
-                    
-                    if (service.toLowerCase().includes('uber')) {
-                      iconName = 'car-outline';
-                      iconColor = '#000000';
-                      serviceName = 'Uber Eats';
-                    } else if (service.toLowerCase().includes('postmates')) {
-                      iconName = 'bicycle-outline';
-                      iconColor = '#FFBD00';
-                      serviceName = 'Postmates';
-                    } else if (service.toLowerCase().includes('doordash')) {
-                      iconName = 'restaurant-outline';
-                      iconColor = '#FF3008';
-                      serviceName = 'DoorDash';
-                    } else if (service.toLowerCase().includes('grubhub')) {
-                      iconName = 'fast-food-outline';
-                      iconColor = '#F63440';
-                      serviceName = 'Grubhub';
-                    }
-                    
-                    return (
-                      <TouchableOpacity key={index} style={styles.deliveryButton}>
-                        <Ionicons name={iconName} size={30} color={iconColor} />
-                        <Text style={styles.deliveryText}>{serviceName}</Text>
-                      </TouchableOpacity>
-                    );
-                  })
-                ) : (
-                  <>
-                    <TouchableOpacity style={styles.deliveryButton}>
-                      <Ionicons name="car-outline" size={30} color="#FF5A5F" />
-                      <Text style={styles.deliveryText}>Uber Eats</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.deliveryButton}>
-                      <Ionicons name="bicycle-outline" size={30} color="#FFBD00" />
-                      <Text style={styles.deliveryText}>Postmates</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.deliveryButton}>
-                      <Ionicons name="restaurant-outline" size={30} color="#01A5EC" />
-                      <Text style={styles.deliveryText}>DoorDash</Text>
-                    </TouchableOpacity>
-                  </>
-                )}
-              </View>
-            </View>
-            <TouchableOpacity style={styles.closeButton} onPress={closeDetails}>
-              <Text style={styles.closeButtonText}>Close</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      {renderDetailsModal()}
     </>
   );
-};
+});
 
 export const FoodCard = memo(FoodCardComponent);
 
@@ -447,43 +727,139 @@ const styles = StyleSheet.create({
     color: '#666',
     fontSize: 16,
     flexShrink: 1,
-    maxWidth: '70%',
+    maxWidth: '90%',
   },
-  price: {
+  metadataRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+    flexWrap: 'wrap',
+  },
+  priceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 10,
+    marginBottom: 8,
+  },
+  priceDotContainer: {
+    flexDirection: 'row',
+    marginRight: 4,
+  },
+  priceDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 2,
+  },
+  priceDotFilled: {
+    backgroundColor: '#FF3B5C',
+  },
+  priceDotEmpty: {
+    backgroundColor: '#FFE0E6',
+    borderWidth: 1,
+    borderColor: '#FFCCD5',
+  },
+  priceText: {
     color: '#FF3B5C',
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 14,
+    fontWeight: '600',
   },
-  likeContainer: {
+  distanceInfoContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  distanceItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF3F5',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 16,
+    marginRight: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#FFCCD5',
+  },
+  distanceText: {
+    fontSize: 13,
+    color: '#333',
+    marginLeft: 4,
+    fontWeight: '600',
+  },
+  distanceTextCalculating: {
+    fontSize: 13,
+    color: '#333',
+    marginLeft: 4,
+    fontWeight: '500',
+  },
+  smallLoader: {
+    marginRight: 2,
+    transform: [{ scale: 0.7 }],
+  },
+  modalPriceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF3F5',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 16,
+  },
+  modalPriceText: {
+    color: '#FF3B5C',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalDistanceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF3F5',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#FFCCD5',
+  },
+  modalDistanceText: {
+    color: '#333',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  likeIndicator: {
     position: 'absolute',
     top: 40,
-    left: 25,
-    transform: [{ rotate: '-20deg' }],
+    right: 10,
+    transform: [{ rotate: '15deg' }],
     borderWidth: 5,
     borderColor: '#01DF8B',
     borderRadius: 5,
     padding: 8,
   },
-  likeText: {
-    fontSize: 42,
-    fontWeight: '900',
-    color: '#01DF8B',
-    letterSpacing: 1,
-  },
-  nopeContainer: {
+  nopeIndicator: {
     position: 'absolute',
     top: 40,
-    right: 25,
-    transform: [{ rotate: '20deg' }],
+    left: 10,
+    transform: [{ rotate: '-15deg' }],
     borderWidth: 5,
     borderColor: '#FF3B5C',
     borderRadius: 5,
     padding: 8,
   },
-  nopeText: {
+  mehIndicator: {
+    position: 'absolute',
+    top: 40,
+    alignSelf: 'center',
+    transform: [{ rotate: '0deg' }],
+    borderWidth: 5,
+    borderColor: '#FFA500',
+    borderRadius: 5,
+    padding: 8,
+  },
+  indicatorText: {
     fontSize: 42,
     fontWeight: '900',
-    color: '#FF3B5C',
+    color: 'white',
     letterSpacing: 1,
   },
   infoButton: {
@@ -636,20 +1012,42 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 4,
   },
-  mehContainer: {
-    position: 'absolute',
-    top: 40,
-    alignSelf: 'center',
-    transform: [{ rotate: '0deg' }],
-    borderWidth: 5,
-    borderColor: '#FFA500',
-    borderRadius: 5,
-    padding: 8,
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 10,
   },
-  mehText: {
-    fontSize: 42,
-    fontWeight: '900',
-    color: '#FFA500',
-    letterSpacing: 1,
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#222',
+  },
+  modalDetailsContainer: {
+    padding: 20,
+  },
+  modalDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  modalDetailLabel: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#444',
+  },
+  modalDetailText: {
+    fontSize: 16,
+    color: '#666',
+  },
+  deliveryButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  deliveryButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#555',
   },
 }); 
