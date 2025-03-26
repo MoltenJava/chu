@@ -55,6 +55,14 @@
     </dict>
     <key>NSCameraUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your camera</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>We need your location to show you delicious food options nearby and notify you about new items in your area.</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>We need your location to show you delicious food options nearby and notify you about new items in your area.</string>
+    <key>NSLocationUsageDescription</key>
+    <string>We need your location to show you delicious food options nearby.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>We need your location to show you delicious food options nearby.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your microphone</string>
     <key>NSPhotoLibraryUsageDescription</key>
@@ -62,6 +70,11 @@
     <key>NSUserActivityTypes</key>
     <array>
       <string>$(PRODUCT_BUNDLE_IDENTIFIER).expo.index_route</string>
+    </array>
+    <key>UIBackgroundModes</key>
+    <array>
+      <string>location</string>
+      <string>fetch</string>
     </array>
     <key>UILaunchStoryboardName</key>
     <string>SplashScreen</string>
@@ -89,9 +102,5 @@
     <string>Automatic</string>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>We need your location to show you delicious food options nearby.</string>
-    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>We need your location to show you delicious food options nearby and notify you about new items in your area.</string>
   </dict>
 </plist>

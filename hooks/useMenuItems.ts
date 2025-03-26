@@ -24,25 +24,43 @@ export function useMenuItems(useLocation: boolean = false) {
 
   const requestLocationPermission = async () => {
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert(
-          'Location Permission Required',
-          'We need your location to show you nearby food options. Please enable location services in your settings.',
-          [
-            { text: 'Not Now', style: 'cancel' },
-            { 
-              text: 'Open Settings', 
-              onPress: openSettings
-            }
-          ]
-        );
+      // First request foreground permissions
+      const foregroundPermission = await Location.requestForegroundPermissionsAsync();
+      if (foregroundPermission.status !== 'granted') {
+        console.log('Permission to access location was denied');
         return false;
       }
+
+      // Then request background permissions if needed
+      const backgroundPermission = await Location.requestBackgroundPermissionsAsync();
+      if (backgroundPermission.status !== 'granted') {
+        console.log('Background location permission was denied');
+        // Still return true as we at least have foreground permissions
+        return true;
+      }
+
       return true;
-    } catch (err) {
-      console.error('Error requesting location permission:', err);
+    } catch (error) {
+      console.error('Error requesting location permission:', error);
       return false;
+    }
+  };
+
+  const getLocation = async () => {
+    const hasPermission = await requestLocationPermission();
+    if (!hasPermission) {
+      console.log('Location permission not granted');
+      return null;
+    }
+
+    try {
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High
+      });
+      return location;
+    } catch (error) {
+      console.error('Error getting location:', error);
+      return null;
     }
   };
 
@@ -58,9 +76,8 @@ export function useMenuItems(useLocation: boolean = false) {
         console.log('Fetching items for restaurant:', currentRestaurant);
         fetchedItems = await getRestaurantMenuItems(currentRestaurant);
       } else if (useLocation) {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const location = await Location.getCurrentPositionAsync({});
+        const location = await getLocation();
+        if (location) {
           console.log('Location fetched:', location);
           
           fetchedItems = await getNearbyMenuItems(
