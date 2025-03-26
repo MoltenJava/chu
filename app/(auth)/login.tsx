@@ -1,125 +1,195 @@
-import { StyleSheet, ActivityIndicator } from 'react-native';
-import * as AppleAuthentication from 'expo-apple-authentication';
-import { router } from 'expo-router';
+import { View, Text, StyleSheet, TouchableOpacity, Image, SafeAreaView, Alert } from 'react-native';
+import { useRouter } from 'expo-router';
 import { supabase } from '@/lib/supabase';
-import { ThemedView } from '@/components/ThemedView';
-import { ThemedText } from '@/components/ThemedText';
-import { useState } from 'react';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Crypto from 'expo-crypto';
 
-export default function LoginScreen() {
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export default function Login() {
+  const router = useRouter();
 
-  const signInWithApple = async () => {
+  const handleAppleSignIn = async () => {
     try {
-      console.log('Starting Apple sign in...');
-      setIsLoading(true);
-      setError(null);
-
-      // Generate a random string for the raw nonce
+      console.log('Starting Apple Sign In process...');
+      
+      // Generate random nonce
       const rawNonce = Array.from(await Crypto.getRandomBytesAsync(32))
         .map(byte => byte.toString(16).padStart(2, '0'))
         .join('');
+      console.log('Generated raw nonce');
       
-      // Hash the raw nonce with SHA256
+      // Hash the nonce
       const hashedNonce = await Crypto.digestStringAsync(
         Crypto.CryptoDigestAlgorithm.SHA256,
         rawNonce
       );
+      console.log('Hashed nonce generated');
 
+      console.log('Requesting Apple authentication...');
+      // Request Apple authentication
       const credential = await AppleAuthentication.signInAsync({
         requestedScopes: [
           AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
           AppleAuthentication.AppleAuthenticationScope.EMAIL,
         ],
-        nonce: hashedNonce // Pass the hashed nonce to Apple
+        nonce: hashedNonce,
       });
 
-      console.log('Got Apple credentials:', {
-        email: credential.email,
-        fullName: credential.fullName,
-        hasToken: !!credential.identityToken,
+      console.log('Apple authentication response received:', {
+        hasIdentityToken: !!credential.identityToken,
+        hasEmail: !!credential.email,
+        hasFullName: !!(credential.fullName?.givenName || credential.fullName?.familyName),
       });
 
       if (!credential.identityToken) {
-        throw new Error('No identity token received from Apple');
+        throw new Error('No identity token from Apple');
       }
 
-      console.log('Attempting Supabase sign in with ID token...');
-      // Sign in with Supabase using the Apple ID token
+      console.log('Attempting Supabase sign in...');
+      // Sign in with Supabase using the Apple token
       const { data, error } = await supabase.auth.signInWithIdToken({
         provider: 'apple',
         token: credential.identityToken,
-        nonce: rawNonce // Pass the raw (unhashed) nonce to Supabase
+        nonce: rawNonce,
       });
 
-      console.log('Supabase sign in result:', { 
-        data: { 
-          session: data?.session ? 'exists' : null,
-          user: data?.user?.id || null 
-        }, 
-        error 
-      });
-
-      if (error) throw error;
-
-      // Check if we have a session after sign in
-      const { data: { session } } = await supabase.auth.getSession();
-      console.log('Session after sign in:', session ? 'exists' : null);
-
-      if (!session) {
-        throw new Error('No session after successful sign in');
+      if (error) {
+        console.error('Supabase sign in error:', {
+          message: error.message,
+          status: error.status,
+          name: error.name,
+        });
+        throw error;
       }
 
-      console.log('Sign in successful, navigating to tabs...');
-      // If successful, navigate to the main app
-      router.replace('/(tabs)');
+      console.log('Supabase sign in successful:', {
+        hasSession: !!data.session,
+        hasUser: !!data.user,
+        userId: data.user?.id,
+      });
+
+      // Check profile status immediately after successful sign in
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('onboarding_completed')
+        .eq('id', data.user!.id)
+        .single();
+
+      console.log('Immediate profile check:', { profile });
+
+      if (!profile?.onboarding_completed) {
+        console.log('Redirecting to profile creation...');
+        router.replace('/(auth)/create-profile');
+      } else {
+        console.log('Profile already completed, redirecting to main app...');
+        router.replace('/(tabs)');
+      }
+
     } catch (error: any) {
-      console.error('Error signing in with Apple:', error);
-      setError(error.message || 'Failed to sign in with Apple');
-    } finally {
-      setIsLoading(false);
+      console.error('Detailed error in Apple Sign In:', {
+        name: error.name,
+        message: error.message,
+        code: error.code,
+        stack: error.stack,
+      });
+
+      if (error.code !== 'ERR_CANCELED') {
+        Alert.alert(
+          'Sign In Error',
+          `Error: ${error.message}\nCode: ${error.code || 'unknown'}`,
+          [{ text: 'OK' }]
+        );
+      }
+    }
+  };
+
+  const resetProfile = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return;
+
+      const { error } = await supabase
+        .from('profiles')
+        .update({ onboarding_completed: false })
+        .eq('id', session.user.id);
+
+      if (error) throw error;
+      Alert.alert('Success', 'Profile reset. Please sign out and sign in again to test profile creation.');
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
     }
   };
 
   return (
-    <ThemedView style={styles.container}>
-      <ThemedText style={styles.title}>Welcome to Chewz</ThemedText>
-      {error && <ThemedText style={styles.error}>{error}</ThemedText>}
-      {isLoading ? (
-        <ActivityIndicator size="large" />
-      ) : (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.content}>
+        {/* Icon */}
+        <Image
+          source={require('@/assets/images/icon-white-on-red.png')}
+          style={styles.icon}
+          resizeMode="contain"
+        />
+        
+        {/* Tagline */}
+        <Text style={styles.tagline}>The menu for everywhere</Text>
+
+        {/* Apple Sign In Button */}
         <AppleAuthentication.AppleAuthenticationButton
           buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-          buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-          cornerRadius={5}
-          style={styles.button}
-          onPress={signInWithApple}
+          buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+          cornerRadius={30}
+          style={styles.appleButton}
+          onPress={handleAppleSignIn}
         />
-      )}
-    </ThemedView>
+
+        {/* Debug Button */}
+        <TouchableOpacity
+          style={styles.debugButton}
+          onPress={resetProfile}
+        >
+          <Text style={styles.debugButtonText}>Reset Profile (Debug)</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
+    backgroundColor: '#d9232a',
+  },
+  content: {
+    flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
     padding: 20,
   },
-  title: {
-    fontSize: 24,
-    marginBottom: 30,
+  icon: {
+    width: 240,
+    height: 240,
+    marginBottom: 0,
   },
-  button: {
-    width: 200,
-    height: 44,
-  },
-  error: {
-    color: '#ff4444',
-    marginBottom: 20,
+  tagline: {
+    fontSize: 20,
+    color: 'white',
+    marginTop: 8,
+    marginBottom: 48,
+    fontWeight: '500',
     textAlign: 'center',
+  },
+  appleButton: {
+    width: '100%',
+    height: 50,
+    maxWidth: 300,
+  },
+  debugButton: {
+    marginTop: 20,
+    padding: 10,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 8,
+  },
+  debugButtonText: {
+    color: 'white',
+    fontSize: 14,
   },
 }); 

@@ -89,5 +89,9 @@
     <string>Automatic</string>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>We need your location to show you delicious food options nearby.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>We need your location to show you delicious food options nearby and notify you about new items in your area.</string>
   </dict>
 </plist>

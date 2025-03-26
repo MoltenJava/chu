@@ -8,26 +8,6 @@
     "scheme": "com.jaz.chewzee",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.jaz.chewzee",
-      "usesAppleSignIn": true,
-      "associatedDomains": [
-        "applinks:com.jaz.chewzee"
-      ]
-    },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      },
-      "package": "com.jaz.chewzee"
-    },
-    "web": {
-      "bundler": "metro",
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
-    },
     "plugins": [
       "expo-router",
       [
@@ -38,8 +18,40 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "We need your location to show you delicious food options nearby and notify you about new items in your area.",
+          "locationWhenInUsePermission": "We need your location to show you delicious food options nearby."
+        }
       ]
     ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jaz.chewzee",
+      "usesAppleSignIn": true,
+      "associatedDomains": [
+        "applinks:com.jaz.chewzee"
+      ],
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "We need your location to show you delicious food options nearby.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location to show you delicious food options nearby and notify you about new items in your area."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.jaz.chewzee",
+      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
     "experiments": {
       "typedRoutes": true
     },

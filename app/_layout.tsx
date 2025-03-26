@@ -11,6 +11,10 @@ import { supabase } from '@/lib/supabase';
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
 
+type AppSegment = '(auth)' | '(tabs)';
+type AuthScreen = 'login' | 'create-profile';
+type TabScreen = 'index' | 'food' | 'explore' | 'rate-photos' | 'couple-mode';
+
 function useProtectedRoute(isReady: boolean) {
   const segments = useSegments();
   const router = useRouter();
@@ -23,36 +27,48 @@ function useProtectedRoute(isReady: boolean) {
 
     const checkSession = async () => {
       try {
-        console.log('Checking session in protected route...');
+        console.log('Checking session in protected route...', { segments });
         const { data: { session } } = await supabase.auth.getSession();
         const inAuthGroup = segments[0] === '(auth)';
+        const currentScreen = segments[segments.length - 1];
         
-        console.log('Session check result:', {
+        console.log('Session check details:', {
           hasSession: !!session,
           inAuthGroup,
-          currentSegments: segments
+          currentSegments: segments,
+          currentScreen,
+          userId: session?.user?.id
         });
 
         if (!session && !inAuthGroup) {
-          console.log('No session and not in auth group, redirecting to login...');
+          console.log('No session, redirecting to login...');
           router.replace('/(auth)/login');
-        } else if (session && inAuthGroup) {
-          console.log('Has session but in auth group, redirecting to tabs...');
-          router.replace('/(tabs)');
-        } else {
-          console.log('No navigation needed:', {
-            hasSession: !!session,
-            inAuthGroup,
-            currentSegments: segments
-          });
+        } else if (session) {
+          // Check if user has completed profile
+          console.log('Checking profile completion...');
+          const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('onboarding_completed')
+            .eq('id', session.user.id)
+            .single();
+
+          console.log('Profile check result:', { profile, error: profileError });
+
+          if (!profile?.onboarding_completed && currentScreen !== 'create-profile') {
+            console.log('Profile not completed, redirecting to profile creation...');
+            router.replace('/(auth)/create-profile');
+          } else if (profile?.onboarding_completed && inAuthGroup) {
+            console.log('Profile completed and in auth group, redirecting to main app...');
+            router.replace('/(tabs)');
+          }
         }
       } catch (error) {
-        console.error('Error checking session:', error);
+        console.error('Error in protected route:', error);
       }
     };
 
     checkSession();
-  }, [isReady, segments]);
+  }, [isReady, segments, router]);
 }
 
 export default function RootLayout() {

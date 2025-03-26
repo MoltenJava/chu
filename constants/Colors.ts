@@ -8,19 +8,24 @@ const tintColorDark = '#fff';
 
 export const Colors = {
   light: {
-    text: '#11181C',
+    text: '#000',
     background: '#fff',
-    tint: tintColorLight,
-    icon: '#687076',
-    tabIconDefault: '#687076',
-    tabIconSelected: tintColorLight,
+    tint: '#2f95dc',
+    icon: '#000',
+    tabIconDefault: '#ccc',
+    tabIconSelected: '#2f95dc',
+    border: '#e1e1e1',
   },
   dark: {
-    text: '#ECEDEE',
-    background: '#151718',
-    tint: tintColorDark,
-    icon: '#9BA1A6',
-    tabIconDefault: '#9BA1A6',
-    tabIconSelected: tintColorDark,
+    text: '#fff',
+    background: '#000',
+    tint: '#fff',
+    icon: '#fff',
+    tabIconDefault: '#ccc',
+    tabIconSelected: '#fff',
+    border: '#333',
   },
-};
+} as const;
+
+export type ColorScheme = keyof typeof Colors;
+export type ColorName = keyof typeof Colors.light;

@@ -17,8 +17,11 @@
   "dependencies": {
     "@expo/vector-icons": "^14.0.2",
     "@react-native-async-storage/async-storage": "1.23.1",
+    "@react-native-community/slider": "4.5.5",
     "@react-navigation/bottom-tabs": "^7.2.0",
     "@react-navigation/native": "^7.0.14",
+    "@sanity/client": "^6.28.3",
+    "@sanity/image-url": "^1.1.0",
     "@supabase/supabase-js": "^2.49.3",
     "@types/node": "^22.13.10",
     "clsx": "^2.1.1",
@@ -28,12 +31,15 @@
     "expo-av": "^15.0.2",
     "expo-blur": "~14.0.3",
     "expo-constants": "~17.0.7",
+    "expo-crypto": "~14.0.2",
+    "expo-dev-client": "~5.0.14",
     "expo-document-picker": "^13.0.3",
     "expo-file-system": "^18.0.11",
     "expo-font": "~13.0.4",
     "expo-haptics": "~14.0.1",
     "expo-image-picker": "^16.0.6",
     "expo-linking": "~7.0.5",
+    "expo-location": "~18.0.8",
     "expo-router": "~4.0.19",
     "expo-sharing": "^13.0.1",
     "expo-splash-screen": "~0.29.22",
@@ -53,8 +59,7 @@
     "react-native-web": "~0.19.13",
     "react-native-webview": "13.12.5",
     "tailwind-merge": "^3.0.2",
-    "expo-dev-client": "~5.0.14",
-    "expo-crypto": "~14.0.2"
+    "expo-linear-gradient": "~14.0.2"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
