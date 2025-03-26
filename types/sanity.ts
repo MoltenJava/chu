@@ -3,7 +3,8 @@ export interface SanityMenuItem {
   _createdAt: string;
   title: string; // Restaurant name
   menu_item: string;
-  image: SanityImage;
+  description?: string;
+  s3_url: string;
   postmates_url?: string;
   doordash_url?: string;
   uber_eats_url?: string;
@@ -12,6 +13,10 @@ export interface SanityMenuItem {
   longitude: number;
   price: number;
   price_level: string;
+  food_type?: string;
+  cuisine?: string;
+  distance_from_user?: number;
+  estimated_duration?: number;
 }
 
 // Helper type for Sanity image URLs

@@ -23,7 +23,8 @@
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "We need your location to show you delicious food options nearby and notify you about new items in your area.",
-          "locationWhenInUsePermission": "We need your location to show you delicious food options nearby."
+          "locationWhenInUsePermission": "We need your location to show you delicious food options nearby.",
+          "isIosBackgroundLocationEnabled": true
         }
       ]
     ],
@@ -36,7 +37,10 @@
       ],
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "We need your location to show you delicious food options nearby.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location to show you delicious food options nearby and notify you about new items in your area."
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location to show you delicious food options nearby and notify you about new items in your area.",
+        "NSLocationAlwaysUsageDescription": "We need your location to show you delicious food options nearby and notify you about new items in your area.",
+        "NSLocationUsageDescription": "We need your location to show you delicious food options nearby.",
+        "UIBackgroundModes": ["location", "fetch"]
       }
     },
     "android": {
@@ -45,7 +49,7 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.jaz.chewzee",
-      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"]
+      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION", "ACCESS_BACKGROUND_LOCATION"]
     },
     "web": {
       "bundler": "metro",

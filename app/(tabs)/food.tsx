@@ -1,14 +1,13 @@
-import React, { useState, useCallback, memo, useEffect, ReactNode } from 'react';
-import { StyleSheet, View, StatusBar as RNStatusBar, Platform, ActivityIndicator, Text } from 'react-native';
+import React, { useState, useCallback, memo } from 'react';
+import { StyleSheet, View, ActivityIndicator, Text } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { foodData } from '../../data/foodData'; // Keep as fallback
-import { loadFoodData, loadRealFoodData, getRestaurantItems } from '../../data/realFoodData'; // Import our new data source and restaurant items function
-import { SwipeableCards } from '../../components/food/SwipeableCards';
-import { FoodItem, SwipeHistoryItem } from '../../types/food';
+import { SwipeableCards } from '@/components/food/SwipeableCards';
+import { useMenuItems } from '@/hooks/useMenuItems';
+import { SanityMenuItem } from '@/types/sanity';
 
 // Simple Error Boundary component to catch and handle rendering errors gracefully
 interface ErrorBoundaryProps {
-  children: ReactNode;
+  children: React.ReactNode;
 }
 
 interface ErrorBoundaryState {
@@ -19,18 +18,15 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
   state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    // Update state so the next render will show the fallback UI
     return { hasError: true };
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
-    // Log the error to an error reporting service
     console.error("Component error:", error, errorInfo);
   }
 
-  render(): ReactNode {
+  render(): React.ReactNode {
     if (this.state.hasError) {
-      // Render fallback UI
       return (
         <View style={[styles.container, styles.centerContent]}>
           <StatusBar style="dark" />
@@ -45,78 +41,25 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
 }
 
 const FoodScreen: React.FC = () => {
-  const [likedFood, setLikedFood] = useState<FoodItem[]>([]);
-  const [swipeHistory, setSwipeHistory] = useState<SwipeHistoryItem[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [foodItems, setFoodItems] = useState<FoodItem[]>([]);
+  const [likedFood, setLikedFood] = useState<SanityMenuItem[]>([]);
+  const { items, loading, error, refresh } = useMenuItems(true); // true to use location
 
-  // Load the food data when the component mounts
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-        
-        // Use loadRealFoodData to get distance information
-        const data = await loadRealFoodData();
-        
-        if (data && data.length > 0) {
-          console.log(`Loaded ${data.length} items with distance info`);
-          console.log(`Sample item: ${JSON.stringify(data[0])}`);
-          setFoodItems(data);
-        } else {
-          console.warn('Real food data is empty, falling back to regular loadFoodData');
-          const fallbackData = await loadFoodData();
-          setFoodItems(fallbackData);
-        }
-      } catch (err) {
-        console.error('Error loading food data:', err);
-        setError('Failed to load food data. Please try again later.');
-        // Fall back to mock data
-        setFoodItems(foodData);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    
-    loadData();
-  }, []);
-
-  const handleLike = useCallback((food: FoodItem) => {
+  const handleLike = useCallback((food: SanityMenuItem) => {
     setLikedFood(prev => [...prev, food]);
     // Here you would typically trigger some API call to save the like
   }, []);
 
-  const handleDislike = useCallback((food: FoodItem) => {
+  const handleDislike = useCallback((food: SanityMenuItem) => {
     // Here you would typically log this preference for future recommendations
   }, []);
 
-  const handleSwipeHistoryUpdate = useCallback((history: SwipeHistoryItem[]) => {
-    // Use functional update pattern to prevent state updates during render cycle
-    setSwipeHistory(prev => {
-      // Only update if the new history is different
-      if (prev.length !== history.length) {
-        return history;
-      }
-      return prev;
-    });
-    // This could be used for analytics or to improve recommendations
-  }, []);
-
-  // Function to get all items for a specific restaurant - used by waiter mode
-  const handleRequestRestaurantItems = useCallback(async (restaurant: string): Promise<FoodItem[]> => {
-    console.log(`FoodScreen: Requesting all items for restaurant: ${restaurant}`);
-    return await getRestaurantItems(restaurant);
-  }, []);
-
   // Show loading indicator while data is being fetched
-  if (isLoading) {
+  if (loading) {
     return (
       <View style={[styles.container, styles.centerContent]}>
         <StatusBar style="dark" />
         <ActivityIndicator size="large" color="#FF3B5C" />
-        <Text style={styles.loadingText}>Loading delicious food...</Text>
+        <Text style={styles.loadingText}>Finding delicious food near you...</Text>
       </View>
     );
   }
@@ -138,11 +81,9 @@ const FoodScreen: React.FC = () => {
       <ErrorBoundary>
         <SwipeableCards
           key="swipe-cards"
-          data={foodItems}
+          data={items}
           onLike={handleLike}
           onDislike={handleDislike}
-          onSwipeHistoryUpdate={handleSwipeHistoryUpdate}
-          onRequestRestaurantItems={handleRequestRestaurantItems}
         />
       </ErrorBoundary>
     </View>

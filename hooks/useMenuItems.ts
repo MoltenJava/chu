@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import * as Location from 'expo-location';
 import { Alert, Linking, Platform } from 'react-native';
 import { SanityMenuItem } from '@/types/sanity';
-import { getMenuItems, getNearbyMenuItems } from '@/lib/sanity';
+import { getMenuItems, getNearbyMenuItems, getRestaurantMenuItems } from '@/lib/sanity';
 
 export function useMenuItems(useLocation: boolean = false) {
   const [items, setItems] = useState<SanityMenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [currentRestaurant, setCurrentRestaurant] = useState<string | null>(null);
 
   const openSettings = async () => {
     try {
@@ -50,29 +51,38 @@ export function useMenuItems(useLocation: boolean = false) {
       setLoading(true);
       setError(null);
 
-      if (useLocation) {
-        const hasPermission = await requestLocationPermission();
-        if (!hasPermission) {
-          // If no permission, fall back to non-location based items
-          const allItems = await getMenuItems();
-          setItems(allItems);
-          return;
+      let fetchedItems: SanityMenuItem[];
+
+      // If in waiter mode, fetch restaurant-specific items
+      if (currentRestaurant) {
+        console.log('Fetching items for restaurant:', currentRestaurant);
+        fetchedItems = await getRestaurantMenuItems(currentRestaurant);
+      } else if (useLocation) {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const location = await Location.getCurrentPositionAsync({});
+          console.log('Location fetched:', location);
+          
+          fetchedItems = await getNearbyMenuItems(
+            location.coords.latitude,
+            location.coords.longitude
+          );
+        } else {
+          console.log('Location permission denied, fetching all items');
+          fetchedItems = await getMenuItems();
         }
-
-        const { coords } = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-
-        const nearbyItems = await getNearbyMenuItems(
-          coords.latitude,
-          coords.longitude,
-          5 // 5km radius
-        );
-        setItems(nearbyItems);
       } else {
-        const allItems = await getMenuItems();
-        setItems(allItems);
+        fetchedItems = await getMenuItems();
       }
+
+      // Debug log the fetched items
+      console.log('Fetched items:', {
+        count: fetchedItems.length,
+        firstItem: fetchedItems[0],
+        waiterMode: !!currentRestaurant
+      });
+
+      setItems(fetchedItems);
     } catch (err) {
       console.error('Error fetching menu items:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch menu items');
@@ -81,18 +91,34 @@ export function useMenuItems(useLocation: boolean = false) {
     }
   };
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     fetchItems();
-  };
+  }, [currentRestaurant, useLocation]);
+
+  // Function to enter waiter mode for a specific restaurant
+  const enterWaiterMode = useCallback((restaurantTitle: string) => {
+    console.log('Entering waiter mode for restaurant:', restaurantTitle);
+    setCurrentRestaurant(restaurantTitle);
+  }, []);
+
+  // Function to exit waiter mode
+  const exitWaiterMode = useCallback(() => {
+    console.log('Exiting waiter mode');
+    setCurrentRestaurant(null);
+  }, []);
 
   useEffect(() => {
     fetchItems();
-  }, [useLocation]);
+  }, [useLocation, currentRestaurant]);
 
   return {
     items,
     loading,
     error,
     refresh,
+    currentRestaurant,
+    enterWaiterMode,
+    exitWaiterMode,
+    isWaiterMode: !!currentRestaurant
   };
 } 

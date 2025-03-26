@@ -1,9 +1,11 @@
 import { createClient } from '@sanity/client';
-import imageUrlBuilder from '@sanity/image-url';
-import { SanityMenuItem, SanityImage } from '@/types/sanity';
-import { Dimensions } from 'react-native';
+import { SanityMenuItem } from '@/types/sanity';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+// Debug Sanity configuration
+console.log('Sanity Config:', {
+  projectId: process.env.EXPO_PUBLIC_SANITY_PROJECT_ID,
+  dataset: process.env.EXPO_PUBLIC_SANITY_DATASET
+});
 
 export const client = createClient({
   projectId: process.env.EXPO_PUBLIC_SANITY_PROJECT_ID!,
@@ -12,42 +14,16 @@ export const client = createClient({
   apiVersion: '2024-03-19',
 });
 
-// Set up the image URL builder
-const imageBuilder = imageUrlBuilder(client);
-
-// Helper function to generate optimized image URLs
-export function urlFor(source: SanityImage, options?: {
-  width?: number;
-  height?: number;
-  quality?: number;
-}) {
-  const builder = imageBuilder.image(source);
-
-  // Default to screen width if no width specified
-  const width = options?.width || SCREEN_WIDTH;
-  
-  return builder
-    .auto('format') // Automatically choose best format (webp/jpeg)
-    .width(Math.round(width))
-    .quality(options?.quality || 80) // Good balance of quality and size
-    .fit('max') // Maintain aspect ratio
-    .url();
-}
-
 // Helper functions for common queries
 export async function getMenuItems() {
-  return client.fetch<SanityMenuItem[]>(`
+  console.log('Fetching all menu items from Sanity...');
+  const items = await client.fetch<SanityMenuItem[]>(`
     *[_type == "menuItem"] {
       _id,
       _createdAt,
       title,
       menu_item,
-      image {
-        asset-> {
-          _ref,
-          url
-        }
-      },
+      s3_url,
       postmates_url,
       doordash_url,
       uber_eats_url,
@@ -58,6 +34,11 @@ export async function getMenuItems() {
       price_level
     }
   `);
+  console.log('Fetched menu items:', {
+    count: items.length,
+    sampleItem: items[0]
+  });
+  return items;
 }
 
 export async function getMenuItem(id: string) {
@@ -67,12 +48,7 @@ export async function getMenuItem(id: string) {
       _createdAt,
       title,
       menu_item,
-      image {
-        asset-> {
-          _ref,
-          url
-        }
-      },
+      s3_url,
       postmates_url,
       doordash_url,
       uber_eats_url,
@@ -87,10 +63,12 @@ export async function getMenuItem(id: string) {
 
 // Get menu items within a certain radius (in kilometers)
 export async function getNearbyMenuItems(lat: number, lng: number, radiusKm: number = 5) {
+  console.log('Fetching nearby menu items:', { lat, lng, radiusKm });
+  
   // Convert radius to degrees (approximate)
   const radiusDegrees = radiusKm / 111;
 
-  return client.fetch<SanityMenuItem[]>(`
+  const items = await client.fetch<SanityMenuItem[]>(`
     *[_type == "menuItem" && 
       latitude >= ${lat - radiusDegrees} &&
       latitude <= ${lat + radiusDegrees} &&
@@ -101,12 +79,7 @@ export async function getNearbyMenuItems(lat: number, lng: number, radiusKm: num
       _createdAt,
       title,
       menu_item,
-      image {
-        asset-> {
-          _ref,
-          url
-        }
-      },
+      s3_url,
       postmates_url,
       doordash_url,
       uber_eats_url,
@@ -117,4 +90,42 @@ export async function getNearbyMenuItems(lat: number, lng: number, radiusKm: num
       price_level
     }
   `);
+
+  console.log('Fetched nearby items:', {
+    count: items.length,
+    sampleItem: items[0]
+  });
+
+  return items;
+}
+
+// Get all menu items for a specific restaurant
+export async function getRestaurantMenuItems(restaurantTitle: string) {
+  console.log('Fetching menu items for restaurant:', restaurantTitle);
+  
+  const items = await client.fetch<SanityMenuItem[]>(`
+    *[_type == "menuItem" && title == $restaurantTitle] {
+      _id,
+      _createdAt,
+      title,
+      menu_item,
+      s3_url,
+      postmates_url,
+      doordash_url,
+      uber_eats_url,
+      address,
+      latitude,
+      longitude,
+      price,
+      price_level
+    }
+  `, { restaurantTitle });
+
+  console.log('Fetched restaurant items:', {
+    count: items.length,
+    restaurant: restaurantTitle,
+    sampleItem: items[0]
+  });
+
+  return items;
 } 

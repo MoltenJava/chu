@@ -1,7 +1,6 @@
 import { View, Text, FlatList, Image, StyleSheet, RefreshControl, Dimensions, ActivityIndicator } from 'react-native';
 import { useMenuItems } from '@/hooks/useMenuItems';
-import { urlFor } from '@/lib/sanity';
-import { SanityImage } from '@/types/sanity';
+import { SanityMenuItem } from '@/types/sanity';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const CARD_MARGIN = 10;
@@ -29,18 +28,6 @@ export default function HomeScreen() {
     );
   }
 
-  const getImageUrl = (image: SanityImage) => {
-    // If we have a direct URL from an expanded asset, use it
-    if (image?.asset?.url) {
-      return image.asset.url;
-    }
-    // Otherwise use the Sanity image URL builder with optimizations
-    return urlFor(image, {
-      width: CARD_WIDTH,
-      quality: 90 // Higher quality for food images
-    });
-  };
-
   if (!items.length) {
     return (
       <View style={[styles.container, styles.centerContent]}>
@@ -50,26 +37,38 @@ export default function HomeScreen() {
     );
   }
 
+  const renderItem = ({ item }: { item: SanityMenuItem }) => {
+    console.log('Rendering item:', {
+      id: item._id,
+      title: item.title,
+      s3_url: item.s3_url,
+      price: item.price
+    });
+
+    const priceDisplay = item.price != null ? `$${item.price.toFixed(2)}` : 'Price not available';
+
+    return (
+      <View style={styles.card}>
+        <Image 
+          source={{ uri: item.s3_url }}
+          style={styles.image}
+          onError={(e) => console.error('Image loading error:', e.nativeEvent.error)}
+        />
+        <View style={styles.content}>
+          <Text style={styles.title}>{item.title}</Text>
+          <Text style={styles.menuItem}>{item.menu_item}</Text>
+          <Text style={[styles.price, !item.price && styles.priceUnavailable]}>{priceDisplay}</Text>
+        </View>
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <FlatList
         data={items}
         keyExtractor={(item) => item._id}
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <Image 
-              source={{ 
-                uri: getImageUrl(item.image)
-              }} 
-              style={styles.image}
-            />
-            <View style={styles.content}>
-              <Text style={styles.title}>{item.title}</Text>
-              <Text style={styles.menuItem}>{item.menu_item}</Text>
-              <Text style={styles.price}>${item.price.toFixed(2)}</Text>
-            </View>
-          </View>
-        )}
+        renderItem={renderItem}
         refreshControl={
           <RefreshControl refreshing={loading} onRefresh={refresh} />
         }
@@ -128,6 +127,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#d9232a',
     marginTop: 5,
+  },
+  priceUnavailable: {
+    color: '#999',
+    fontStyle: 'italic',
   },
   loadingText: {
     marginTop: 10,
