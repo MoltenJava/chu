@@ -20,6 +20,7 @@ import {
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { FoodCard } from './FoodCard';
 import { FoodItem, CoupleSession, AgreeMatch, SwipeDirection } from '../../types/food';
+import { SanityMenuItem } from '@/types/sanity';
 import * as Haptics from 'expo-haptics';
 import {
   createCoupleSession,
@@ -154,6 +155,31 @@ const DebugOverlay: React.FC<DebugOverlayProps> = ({ visible, onClose, userId })
       </View>
     </View>
   );
+};
+
+// Add this conversion function near the top of the file, before the CoupleMode component
+// Convert FoodItem to SanityMenuItem for compatibility with FoodCard
+const convertFoodItemToSanity = (food: FoodItem): SanityMenuItem => {
+  return {
+    _id: food.id,
+    _createdAt: new Date().toISOString(),
+    title: food.restaurant,
+    menu_item: food.name,
+    description: food.description,
+    s3_url: food.imageUrl,
+    postmates_url: food.deliveryUrls?.postmates,
+    doordash_url: food.deliveryUrls?.doorDash,
+    uber_eats_url: food.deliveryUrls?.uberEats,
+    address: food.address || '',
+    latitude: food.coordinates?.latitude || 0,
+    longitude: food.coordinates?.longitude || 0,
+    price: parseFloat(food.price.replace(/[^0-9.]/g, '')) || 0,
+    price_level: '$',
+    food_type: Array.isArray(food.foodType) ? food.foodType[0] : food.foodType,
+    cuisine: food.cuisine,
+    distance_from_user: food.distanceFromUser,
+    estimated_duration: food.estimatedDuration
+  };
 };
 
 const CoupleMode: React.FC<CoupleModeProps> = ({ data, onExit, userId }) => {
@@ -404,7 +430,7 @@ const CoupleMode: React.FC<CoupleModeProps> = ({ data, onExit, userId }) => {
     }
   };
   
-  // Handle swipe in couple mode
+  // Update the handleSwipe function to use the converter
   const handleSwipe = async (food: FoodItem, direction: SwipeDirection) => {
     if (!session || !isTimerActive) return;
     
@@ -421,6 +447,15 @@ const CoupleMode: React.FC<CoupleModeProps> = ({ data, onExit, userId }) => {
     } catch (error) {
       console.error('Error recording swipe:', error);
     }
+  };
+  
+  // Create a wrapper function to adapt the original handleSwipe to work with SanityMenuItem
+  const handleCardSwipe = (food: SanityMenuItem, direction: SwipeDirection) => {
+    if (!currentFoodItem) return;
+    
+    // We're using the actual currentFoodItem from state rather than trying to convert back
+    // This ensures we're using the exact same object that's in our state
+    handleSwipe(currentFoodItem, direction);
   };
   
   // End session and show results
@@ -594,7 +629,7 @@ const CoupleMode: React.FC<CoupleModeProps> = ({ data, onExit, userId }) => {
     </View>
   );
   
-  // Restore the renderActiveSession function
+  // Update the renderActiveSession function to use the converter
   const renderActiveSession = () => (
     <View style={styles.container}>
       {/* Timer */}
@@ -620,8 +655,8 @@ const CoupleMode: React.FC<CoupleModeProps> = ({ data, onExit, userId }) => {
       <View style={styles.cardContainer}>
         {currentFoodItem && (
           <FoodCard
-            food={currentFoodItem}
-            onSwipe={handleSwipe}
+            food={convertFoodItemToSanity(currentFoodItem)}
+            onSwipe={handleCardSwipe}
             isFirst={true}
             index={0}
           />

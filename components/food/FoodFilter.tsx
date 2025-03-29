@@ -15,18 +15,28 @@ import {
   MaterialIcons,
   Entypo
 } from '@expo/vector-icons';
-import { FilterOption, FoodType } from '../../types/food';
 
 const { width } = Dimensions.get('window');
 
+interface FilterOption {
+  id: string;
+  label: string;
+  type: string;
+  icon: string;
+  color: string;
+  selected: boolean;
+}
+
 interface FoodFilterProps {
-  onFilterChange: (selectedFilters: FoodType[]) => void;
-  initialSelectedFilters?: FoodType[];
+  onFilterChange: (selectedFilters: string[]) => void;
+  initialSelectedFilters?: string[];
+  onClose?: () => void;
 }
 
 const FoodFilter: React.FC<FoodFilterProps> = ({ 
   onFilterChange,
-  initialSelectedFilters = [] 
+  initialSelectedFilters = [],
+  onClose
 }) => {
   const [filterOptions, setFilterOptions] = useState<FilterOption[]>([
     {
@@ -170,7 +180,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       setFilterOptions(updatedOptions);
       
       // Notify parent component of the selected filter
-      let selectedFilter: FoodType[] = [];
+      let selectedFilter: string[] = [];
       
       // If anything other than "All" is selected, add it to the array
       updatedOptions.forEach((option, i) => {

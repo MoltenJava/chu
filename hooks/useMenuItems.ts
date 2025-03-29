@@ -4,6 +4,30 @@ import { Alert, Linking, Platform } from 'react-native';
 import { SanityMenuItem } from '@/types/sanity';
 import { getMenuItems, getNearbyMenuItems, getRestaurantMenuItems } from '@/lib/sanity';
 
+// Westwood, Los Angeles coordinates
+const WESTWOOD_LOCATION = {
+  coords: {
+    latitude: 34.0633,
+    longitude: -118.4478,
+    accuracy: 5,
+    altitude: 0,
+    altitudeAccuracy: -1,
+    heading: -1,
+    speed: -1
+  },
+  timestamp: Date.now()
+};
+
+// Fisher-Yates shuffle algorithm
+function shuffleArray<T>(array: T[]): T[] {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
 export function useMenuItems(useLocation: boolean = false) {
   const [items, setItems] = useState<SanityMenuItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,6 +71,12 @@ export function useMenuItems(useLocation: boolean = false) {
   };
 
   const getLocation = async () => {
+    // Use Westwood location in development
+    if (__DEV__) {
+      console.log('Using development location: Westwood, LA');
+      return WESTWOOD_LOCATION;
+    }
+
     const hasPermission = await requestLocationPermission();
     if (!hasPermission) {
       console.log('Location permission not granted');
@@ -98,6 +128,12 @@ export function useMenuItems(useLocation: boolean = false) {
         firstItem: fetchedItems[0],
         waiterMode: !!currentRestaurant
       });
+
+      // Randomize the items unless in waiter mode
+      if (!currentRestaurant) {
+        fetchedItems = shuffleArray(fetchedItems);
+        console.log('Randomized items order');
+      }
 
       setItems(fetchedItems);
     } catch (err) {
