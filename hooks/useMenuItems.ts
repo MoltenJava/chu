@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as Location from 'expo-location';
 import { Alert, Linking, Platform } from 'react-native';
-import { SanityMenuItem } from '@/types/sanity';
-import { getMenuItems, getNearbyMenuItems, getRestaurantMenuItems } from '@/lib/sanity';
+import { supabase } from '@/lib/supabase';
+import { SupabaseMenuItem, convertToSupabaseMenuItem } from '@/types/supabase';
 
 // Westwood, Los Angeles coordinates
 const WESTWOOD_LOCATION = {
@@ -29,7 +29,7 @@ function shuffleArray<T>(array: T[]): T[] {
 }
 
 export function useMenuItems(useLocation: boolean = false) {
-  const [items, setItems] = useState<SanityMenuItem[]>([]);
+  const [items, setItems] = useState<SupabaseMenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentRestaurant, setCurrentRestaurant] = useState<string | null>(null);
@@ -99,43 +99,66 @@ export function useMenuItems(useLocation: boolean = false) {
       setLoading(true);
       setError(null);
 
-      let fetchedItems: SanityMenuItem[];
+      let query = supabase
+        .from('menu_items')
+        .select(`
+          *,
+          restaurant:restaurants(*)
+        `);
 
       // If in waiter mode, fetch restaurant-specific items
       if (currentRestaurant) {
         console.log('Fetching items for restaurant:', currentRestaurant);
-        fetchedItems = await getRestaurantMenuItems(currentRestaurant);
+        query = query.eq('restaurants.name', currentRestaurant);
       } else if (useLocation) {
         const location = await getLocation();
         if (location) {
           console.log('Location fetched:', location);
           
-          fetchedItems = await getNearbyMenuItems(
-            location.coords.latitude,
-            location.coords.longitude
-          );
-        } else {
-          console.log('Location permission denied, fetching all items');
-          fetchedItems = await getMenuItems();
+          // Calculate bounding box (roughly 5km)
+          const lat = location.coords.latitude;
+          const lng = location.coords.longitude;
+          const latDelta = 0.045; // Roughly 5km
+          const lngDelta = 0.045 / Math.cos(lat * Math.PI / 180);
+          
+          query = query
+            .gte('restaurants.latitude', lat - latDelta)
+            .lte('restaurants.latitude', lat + latDelta)
+            .gte('restaurants.longitude', lng - lngDelta)
+            .lte('restaurants.longitude', lng + lngDelta);
         }
-      } else {
-        fetchedItems = await getMenuItems();
       }
+
+      const { data: menuItems, error: fetchError } = await query;
+
+      if (fetchError) {
+        throw fetchError;
+      }
+
+      if (!menuItems) {
+        throw new Error('No menu items found');
+      }
+
+      // Convert to SupabaseMenuItem format
+      const convertedItems = menuItems.map(item => 
+        convertToSupabaseMenuItem(item, item.restaurant)
+      );
 
       // Debug log the fetched items
       console.log('Fetched items:', {
-        count: fetchedItems.length,
-        firstItem: fetchedItems[0],
+        count: convertedItems.length,
+        firstItem: convertedItems[0],
         waiterMode: !!currentRestaurant
       });
 
       // Randomize the items unless in waiter mode
       if (!currentRestaurant) {
-        fetchedItems = shuffleArray(fetchedItems);
+        const randomizedItems = shuffleArray(convertedItems);
         console.log('Randomized items order');
+        setItems(randomizedItems);
+      } else {
+        setItems(convertedItems);
       }
-
-      setItems(fetchedItems);
     } catch (err) {
       console.error('Error fetching menu items:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch menu items');

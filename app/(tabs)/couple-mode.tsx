@@ -2,18 +2,26 @@ import React, { useState, useEffect } from 'react';
 import { StyleSheet, View, StatusBar as RNStatusBar, ActivityIndicator, Text, BackHandler, TouchableOpacity } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { loadFoodData, loadRealFoodData } from '../../data/realFoodData';
-import CoupleMode from '../../components/food/CoupleMode';
+import { CoupleModeScreen as CoupleMode } from '../../components/couple/CoupleModeScreen';
 import { FoodItem } from '../../types/food';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from '@/lib/supabase';
 import { 
-  clearCurrentSessionData, 
-  testAsyncStorage,
-  getCurrentSessionId,
-  deepCleanupAllCoupleModeData,
-  checkStorageStatus,
-  COUPLE_SESSIONS_KEY
-} from '../../utils/coupleSessionService';
+  createSession, 
+  joinSession, 
+  getSessionMatches, 
+  getSessionSwipes,
+  getUserSwipes,
+  getPartnerSwipes,
+  endSession,
+  getActiveSessions,
+  getSessionById,
+  getSessionByCode,
+  subscribeToSession,
+  subscribeToMatches,
+  subscribeToSwipes
+} from '../../utils/coupleModeService';
 
 // Generate a random user ID if none exists
 const getUserId = async (): Promise<string> => {
@@ -71,6 +79,44 @@ const setTestSessionData = async () => {
   } catch (error: any) {
     console.error('[TEST] Error setting test data:', error);
     alert('Error setting test data: ' + (error?.message || 'Unknown error'));
+  }
+};
+
+// Add this test function
+const testSupabaseConnection = async () => {
+  try {
+    console.log('Testing Supabase connection...');
+    
+    // Test 1: Get current user
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    console.log('Current user:', user ? 'Authenticated' : 'Not authenticated');
+    if (userError) throw userError;
+
+    // Test 2: Try to create a test couple session
+    if (user) {
+      const { data: sessionData, error: sessionError } = await supabase
+        .from('couple_sessions')
+        .insert({
+          created_by: user.id,
+          session_code: 'TEST' + Math.floor(Math.random() * 1000000)
+        })
+        .select()
+        .single();
+
+      console.log('Test session creation result:', sessionData ? 'Success' : 'Failed');
+      if (sessionError) throw sessionError;
+
+      // Clean up test session
+      await supabase
+        .from('couple_sessions')
+        .delete()
+        .eq('id', sessionData.id);
+    }
+
+    alert('Supabase connection test passed! Check console for details.');
+  } catch (error: any) {
+    console.error('Supabase test error:', error);
+    alert('Supabase test failed: ' + (error.message || 'Unknown error'));
   }
 };
 
@@ -165,6 +211,11 @@ export default function CoupleModeScreen() {
         
         if (data && data.length > 0) {
           console.log(`Loaded ${data.length} items for couple mode`);
+          // Log the first few items to debug restaurant names
+          console.log('[COUPLE-MODE] First 3 food items:');
+          data.slice(0, 3).forEach((item, index) => {
+            console.log(`[COUPLE-MODE] Item ${index}: id=${item.id}, name=${item.name}, restaurant=${item.restaurant}`);
+          });
           setFoodItems(data);
         } else {
           console.warn('Real food data is empty, falling back to regular loadFoodData');
@@ -258,18 +309,80 @@ export default function CoupleModeScreen() {
     <View style={styles.container}>
       <StatusBar style="dark" />
       <CoupleMode
-        data={foodItems}
-        onExit={handleExit}
-        userId={userId}
+        foodItems={foodItems.map(item => {
+          // Log each item to debug restaurant names
+          console.log(`[COUPLE-MODE-MAP] Mapping item: id=${item.id}, name=${item.name}, restaurant=${item.restaurant}`);
+          
+          return {
+            id: item.id,
+            name: item.name,
+            description: item.description || '',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            category: item.foodType.join(', '),
+            restaurant_id: '',
+            s3_url: item.imageUrl,
+            s3_key: '',
+            is_active: true,
+            price: parseFloat(item.price.replace(/[^0-9.]/g, '')) || 0,
+            dietary_info: {
+              vegan: false,
+              vegetarian: false,
+              gluten_free: false,
+              dairy_free: false,
+              halal: false,
+              kosher: false,
+              nut_free: false
+            },
+            spiciness: 0,
+            popularity_score: 0,
+            available: true,
+            _id: item.id,
+            _createdAt: new Date().toISOString(),
+            menu_item: item.name,
+            title: item.restaurant,
+            restaurant: {
+              id: item.id,
+              place_id: '',
+              name: item.restaurant,
+              address: item.address || null,
+              price_range: item.price || null,
+              latitude: item.coordinates?.latitude || null,
+              longitude: item.coordinates?.longitude || null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            },
+            food_type: item.foodType.join(', '),
+            cuisine: item.cuisine || '',
+            distance_from_user: item.distanceFromUser || 0,
+            estimated_duration: item.estimatedDuration || 0,
+            address: item.address || '',
+            latitude: item.coordinates?.latitude || 0,
+            longitude: item.coordinates?.longitude || 0,
+            uber_eats_url: item.deliveryUrls?.uberEats || '',
+            doordash_url: item.deliveryUrls?.doorDash || '',
+            postmates_url: item.deliveryUrls?.postmates || '',
+            price_level: item.price || '$$'
+          };
+        })}
       />
       
       {__DEV__ && (
-        <TouchableOpacity 
-          style={styles.debugButton} 
-          onPress={handleDebugStorage}
-        >
-          <Text style={styles.debugText}>Debug Storage</Text>
-        </TouchableOpacity>
+        <View style={styles.debugButtons}>
+          <TouchableOpacity 
+            style={styles.debugButton} 
+            onPress={handleDebugStorage}
+          >
+            <Text style={styles.debugText}>Debug Storage</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.debugButton} 
+            onPress={testSupabaseConnection}
+          >
+            <Text style={styles.debugText}>Test Supabase</Text>
+          </TouchableOpacity>
+        </View>
       )}
     </View>
   );
@@ -309,10 +422,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  debugButton: {
+  debugButtons: {
     position: 'absolute',
     right: 15,
     bottom: 15,
+    gap: 10,
+  },
+  debugButton: {
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     paddingVertical: 8,
     paddingHorizontal: 15,

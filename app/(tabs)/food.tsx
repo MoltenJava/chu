@@ -3,7 +3,18 @@ import { StyleSheet, View, ActivityIndicator, Text } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SwipeableCards } from '@/components/food/SwipeableCards';
 import { useMenuItems } from '@/hooks/useMenuItems';
-import { SanityMenuItem } from '@/types/sanity';
+import { SupabaseMenuItem } from '@/types/supabase';
+import { useNavigation } from 'expo-router';
+
+// Define types for the Root Stack Navigator
+// This needs to include all routes defined in app/_layout.tsx
+type RootStackParamList = {
+  '(tabs)': undefined;
+  '(auth)': undefined;
+  playlistList: undefined; // Add playlistList route
+  playlistDetail: { playlistId: string; playlistName: string }; // Add playlistDetail route
+  // Add other root routes if they exist
+};
 
 // Simple Error Boundary component to catch and handle rendering errors gracefully
 interface ErrorBoundaryProps {
@@ -29,7 +40,10 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
     if (this.state.hasError) {
       return (
         <View style={[styles.container, styles.centerContent]}>
-          <StatusBar style="dark" />
+          <StatusBar 
+            style="dark" 
+            backgroundColor="#FAFAFA" // Change background to #FAFAFA
+          />
           <Text style={styles.errorText}>Something went wrong</Text>
           <Text style={styles.loadingText}>Please restart the app</Text>
         </View>
@@ -41,15 +55,16 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
 }
 
 const FoodScreen: React.FC = () => {
-  const [likedFood, setLikedFood] = useState<SanityMenuItem[]>([]);
+  const [likedFood, setLikedFood] = useState<SupabaseMenuItem[]>([]);
   const { items, loading, error, refresh } = useMenuItems(true); // true to use location
+  const navigation = useNavigation<any>(); // Using any temporarily, replace with correct type if available
 
-  const handleLike = useCallback((food: SanityMenuItem) => {
+  const handleLike = useCallback((food: SupabaseMenuItem) => {
     setLikedFood(prev => [...prev, food]);
     // Here you would typically trigger some API call to save the like
   }, []);
 
-  const handleDislike = useCallback((food: SanityMenuItem) => {
+  const handleDislike = useCallback((food: SupabaseMenuItem) => {
     // Here you would typically log this preference for future recommendations
   }, []);
 
@@ -57,7 +72,10 @@ const FoodScreen: React.FC = () => {
   if (loading) {
     return (
       <View style={[styles.container, styles.centerContent]}>
-        <StatusBar style="dark" />
+        <StatusBar 
+          style="dark" 
+          backgroundColor="#FAFAFA" // Change background to #FAFAFA
+        />
         <ActivityIndicator size="large" color="#FF3B5C" />
         <Text style={styles.loadingText}>Finding delicious food near you...</Text>
       </View>
@@ -68,7 +86,10 @@ const FoodScreen: React.FC = () => {
   if (error) {
     return (
       <View style={[styles.container, styles.centerContent]}>
-        <StatusBar style="dark" />
+        <StatusBar 
+          style="dark" 
+          backgroundColor="#FAFAFA" // Change background to #FAFAFA
+        />
         <Text style={styles.errorText}>{error}</Text>
       </View>
     );
@@ -76,7 +97,10 @@ const FoodScreen: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      <StatusBar style="dark" />
+      <StatusBar 
+        style="dark" 
+        backgroundColor="#FAFAFA" // Change background to #FAFAFA
+      />
       
       <ErrorBoundary>
         <SwipeableCards
@@ -93,7 +117,7 @@ const FoodScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'white', // Pure white background to focus on food images
+    backgroundColor: '#FAFAFA', // Change background to off-white
   },
   centerContent: {
     justifyContent: 'center',
@@ -103,11 +127,11 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 15,
     fontSize: 16,
-    color: '#555',
+    color: '#212121', // Change text color to dark gray
   },
   errorText: {
     fontSize: 16,
-    color: '#FF3B5C',
+    color: '#F44336', // Keep a standard error red
     textAlign: 'center',
   },
 });

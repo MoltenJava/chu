@@ -18,6 +18,15 @@ import {
 
 const { width } = Dimensions.get('window');
 
+// Define rustic Palm Springs colors
+const rustWheat = '#E5D3B3';       // Light tan/wheat color
+const rustWood = '#A67C52';        // Medium wood tone
+const rustBark = '#715031';        // Darker wood/bark
+const rustCharcoal = '#3A3A3A';    // Charcoal gray for buttons
+const rustEmber = '#BF5942';       // Ember/burnt orange accent
+const rustSand = '#DDC9A3';        // Lighter sand color
+const rustShadow = '#292522';      // Dark shadow color for text
+
 interface FilterOption {
   id: string;
   label: string;
@@ -44,7 +53,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       label: 'All',
       type: 'all',
       icon: 'restaurant-menu',
-      color: '#FF3B5C',
+      color: rustEmber,
       selected: initialSelectedFilters.length === 0
     },
     {
@@ -52,7 +61,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       label: 'Spicy',
       type: 'spicy',
       icon: 'fire',
-      color: '#FF5252',
+      color: rustEmber,
       selected: initialSelectedFilters.includes('spicy')
     },
     {
@@ -60,7 +69,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       label: 'Vegan',
       type: 'vegan',
       icon: 'leaf',
-      color: '#4CAF50',
+      color: rustEmber,
       selected: initialSelectedFilters.includes('vegan')
     },
     {
@@ -68,7 +77,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       label: 'Dessert',
       type: 'dessert',
       icon: 'ice-cream',
-      color: '#FF80AB',
+      color: rustEmber,
       selected: initialSelectedFilters.includes('dessert')
     },
     {
@@ -76,7 +85,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       label: 'Healthy',
       type: 'healthy',
       icon: 'heartbeat',
-      color: '#2196F3',
+      color: rustEmber,
       selected: initialSelectedFilters.includes('healthy')
     },
     {
@@ -84,7 +93,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       label: 'Breakfast',
       type: 'breakfast',
       icon: 'coffee',
-      color: '#FFA000',
+      color: rustEmber,
       selected: initialSelectedFilters.includes('breakfast')
     },
     {
@@ -92,7 +101,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       label: 'Lunch',
       type: 'lunch',
       icon: 'hamburger',
-      color: '#795548',
+      color: rustEmber,
       selected: initialSelectedFilters.includes('lunch')
     },
     {
@@ -100,7 +109,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       label: 'Dinner',
       type: 'dinner',
       icon: 'utensils',
-      color: '#607D8B',
+      color: rustEmber,
       selected: initialSelectedFilters.includes('dinner')
     },
     {
@@ -108,7 +117,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       label: 'Comfort',
       type: 'comfort',
       icon: 'home',
-      color: '#9C27B0',
+      color: rustEmber,
       selected: initialSelectedFilters.includes('comfort')
     },
     {
@@ -116,7 +125,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       label: 'Seafood',
       type: 'seafood',
       icon: 'fish',
-      color: '#00BCD4',
+      color: rustEmber,
       selected: initialSelectedFilters.includes('seafood')
     },
     {
@@ -124,7 +133,7 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
       label: 'Fast Food',
       type: 'fast-food',
       icon: 'hamburger',
-      color: '#F44336',
+      color: rustEmber,
       selected: initialSelectedFilters.includes('fast-food')
     }
   ]);
@@ -246,16 +255,16 @@ const FoodFilter: React.FC<FoodFilterProps> = ({
               style={[
                 styles.filterButton,
                 {
-                  backgroundColor: option.selected ? option.color : '#F0F0F0',
+                  backgroundColor: option.selected ? rustEmber : rustCharcoal,
                   transform: [{ scale: scaleAnimations[index] }]
                 }
               ]}
             >
-              {getIconComponent(option.icon, option.selected ? '#FFFFFF' : option.color, index)}
+              {getIconComponent(option.icon, 'white', index)}
             </Animated.View>
             <Text style={[
               styles.filterLabel,
-              {color: option.selected ? option.color : '#555'}
+              {color: option.selected ? rustEmber : rustBark}
             ]}>
               {option.label}
             </Text>
@@ -275,7 +284,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     marginBottom: 10,
-    color: '#333',
+    color: rustShadow,
     textAlign: 'center',
   },
   scrollContent: {
@@ -289,7 +298,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginHorizontal: 6,
-    shadowColor: '#000',
+    shadowColor: rustShadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 3,

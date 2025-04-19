@@ -3,27 +3,47 @@
  * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
  */
 
-const tintColorLight = '#0a7ea4';
-const tintColorDark = '#fff';
+// Rustic Palm Springs color palette - wood, charcoal, and desert inspired
+const rustWheat = '#E5D3B3';       // Light tan/wheat color
+const rustWood = '#A67C52';        // Medium wood tone
+const rustBark = '#715031';        // Darker wood/bark
+const rustCharcoal = '#3A3A3A';    // Charcoal gray
+const rustEmber = '#BF5942';       // Ember/burnt orange accent
+const rustSand = '#DDC9A3';        // Lighter sand color
+const rustShadow = '#292522';      // Dark shadow color for text
+
+// Keeping backward compatibility
+const tintColorLight = rustEmber;
+const tintColorDark = rustSand;
 
 export const Colors = {
   light: {
-    text: '#000',
-    background: '#fff',
-    tint: '#2f95dc',
-    icon: '#000',
-    tabIconDefault: '#ccc',
-    tabIconSelected: '#2f95dc',
-    border: '#e1e1e1',
+    text: rustShadow,
+    background: rustWheat,
+    tint: rustEmber,
+    icon: rustBark,
+    tabIconDefault: '#BDB19F',
+    tabIconSelected: rustEmber,
+    border: rustWood,
+    primary: rustEmber,
+    secondary: rustWood,
+    accent: rustBark,
+    cardBackground: rustSand,
+    headerBackground: rustSand,
   },
   dark: {
-    text: '#fff',
-    background: '#000',
-    tint: '#fff',
-    icon: '#fff',
-    tabIconDefault: '#ccc',
-    tabIconSelected: '#fff',
-    border: '#333',
+    text: rustSand,
+    background: rustShadow,
+    tint: rustEmber,
+    icon: rustSand,
+    tabIconDefault: '#71635A',
+    tabIconSelected: rustEmber,
+    border: rustBark,
+    primary: rustEmber,
+    secondary: rustWood,
+    accent: rustSand,
+    cardBackground: rustCharcoal,
+    headerBackground: rustCharcoal,
   },
 } as const;
 

@@ -5,12 +5,12 @@
 CREATE TABLE IF NOT EXISTS user_saved_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  sanity_item_id TEXT NOT NULL, -- Reference to Sanity.io document ID
+  menu_item_id UUID REFERENCES menu_items(id) ON DELETE CASCADE,
   saved_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
   notes TEXT,
   order_count INTEGER DEFAULT 0,
   last_ordered_at TIMESTAMP WITH TIME ZONE,
-  UNIQUE(user_id, sanity_item_id)
+  UNIQUE(user_id, menu_item_id)
 );
 
 -- Add RLS (Row Level Security) policies

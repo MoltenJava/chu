@@ -1,29 +1,10 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { UserSavedItem } from '@/types/database';
-import { client } from '@/lib/sanity';
-
-// This interface will be defined based on your Sanity.io schema
-interface SanityMenuItem {
-  _id: string;
-  name: string;
-  description?: string;
-  image?: {
-    asset: {
-      url: string;
-    };
-  };
-  restaurant: {
-    name: string;
-    location?: {
-      address?: string;
-    };
-  };
-  price?: number;
-}
+import { SupabaseMenuItem, convertToSupabaseMenuItem } from '@/types/supabase';
 
 export interface SavedItemWithDetails extends UserSavedItem {
-  menuItem: SanityMenuItem;
+  menuItem: SupabaseMenuItem;
 }
 
 export function useSavedItems() {
@@ -39,45 +20,49 @@ export function useSavedItems() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
 
-      // Get saved items from Supabase
       const { data: savedItemsData, error: supabaseError } = await supabase
         .from('user_saved_items')
         .select('*')
-        .eq('user_id', user.id)
         .order('saved_at', { ascending: false });
 
       if (supabaseError) throw supabaseError;
 
-      // Get menu items from Sanity
-      const sanityIds = savedItemsData.map(item => item.sanity_item_id);
-      const menuItems = await client.fetch(`
-        *[_type == "menuItem" && _id in $ids]{
-          _id,
-          name,
-          description,
-          image {
-            asset-> {
-              url
-            }
-          },
-          restaurant-> {
-            name,
-            location {
-              address
-            }
-          },
-          price
-        }
-      `, { ids: sanityIds });
+      // Get menu items from Supabase
+      const menuItemIds = savedItemsData.map(item => item.menu_item_id);
+      
+      // Fetch menu items
+      const { data: menuItems, error: menuItemsError } = await supabase
+        .from('menu_items')
+        .select('*')
+        .in('id', menuItemIds);
+        
+      if (menuItemsError) throw menuItemsError;
+      
+      // Fetch restaurants for these menu items
+      const restaurantIds = menuItems?.map(item => item.restaurant_id) || [];
+      const { data: restaurants, error: restaurantsError } = await supabase
+        .from('restaurants')
+        .select('*')
+        .in('id', restaurantIds);
+        
+      if (restaurantsError) throw restaurantsError;
+      
+      // Create a map of restaurant IDs to restaurant objects
+      const restaurantMap = new Map();
+      restaurants?.forEach(restaurant => {
+        restaurantMap.set(restaurant.id, restaurant);
+      });
 
-      // Combine Supabase and Sanity data
+      // Combine Supabase data
       const combinedData = savedItemsData.map(savedItem => {
-        const menuItem = menuItems.find(item => item._id === savedItem.sanity_item_id);
+        const menuItem = menuItems?.find(item => item.id === savedItem.menu_item_id);
+        const restaurant = menuItem ? restaurantMap.get(menuItem.restaurant_id) : undefined;
+        
         return {
           ...savedItem,
-          menuItem,
+          menuItem: menuItem ? convertToSupabaseMenuItem(menuItem, restaurant) : null,
         };
-      });
+      }).filter(item => item.menuItem !== null) as SavedItemWithDetails[];
 
       setSavedItems(combinedData);
     } catch (err) {
@@ -88,7 +73,7 @@ export function useSavedItems() {
     }
   };
 
-  const addSavedItem = async (sanityItemId: string) => {
+  const addSavedItem = async (menuItemId: string) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
@@ -97,7 +82,7 @@ export function useSavedItems() {
         .from('user_saved_items')
         .insert({
           user_id: user.id,
-          sanity_item_id: sanityItemId,
+          menu_item_id: menuItemId,
         });
 
       if (insertError) throw insertError;
@@ -110,7 +95,7 @@ export function useSavedItems() {
     }
   };
 
-  const removeSavedItem = async (sanityItemId: string) => {
+  const removeSavedItem = async (menuItemId: string) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
@@ -119,19 +104,19 @@ export function useSavedItems() {
         .from('user_saved_items')
         .delete()
         .eq('user_id', user.id)
-        .eq('sanity_item_id', sanityItemId);
+        .eq('menu_item_id', menuItemId);
 
       if (deleteError) throw deleteError;
 
       // Update local state
-      setSavedItems(prev => prev.filter(item => item.sanity_item_id !== sanityItemId));
+      setSavedItems(prev => prev.filter(item => item.menu_item_id !== menuItemId));
     } catch (err) {
       console.error('Error removing saved item:', err);
       throw err;
     }
   };
 
-  const updateSavedItem = async (sanityItemId: string, updates: Partial<UserSavedItem>) => {
+  const updateSavedItem = async (menuItemId: string, updates: Partial<UserSavedItem>) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
@@ -140,7 +125,7 @@ export function useSavedItems() {
         .from('user_saved_items')
         .update(updates)
         .eq('user_id', user.id)
-        .eq('sanity_item_id', sanityItemId);
+        .eq('menu_item_id', menuItemId);
 
       if (updateError) throw updateError;
 

@@ -1,6 +1,6 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
-import { Slot, useRouter, useSegments } from 'expo-router';
+import { Slot, Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
@@ -8,6 +8,7 @@ import { View, ActivityIndicator } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { supabase } from '@/lib/supabase';
+import { CoupleProvider } from '../context/CoupleContext';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -59,8 +60,7 @@ function useProtectedRoute(isReady: boolean) {
             console.log('Profile not completed, redirecting to profile creation...');
             router.replace('/(auth)/create-profile');
           } else if (profile?.onboarding_completed && inAuthGroup) {
-            console.log('Profile completed and in auth group, redirecting to main app...');
-            router.replace('/(tabs)');
+            console.log('Profile completed and in auth group, should automatically navigate to (tabs)');
           }
         }
       } catch (error) {
@@ -105,11 +105,32 @@ export default function RootLayout() {
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Slot />
-        <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
-      </ThemeProvider>
-    </GestureHandlerRootView>
+    <CoupleProvider>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="food" />
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen 
+              name="playlistList" 
+              options={{ 
+                presentation: 'modal',
+                headerShown: true, 
+                title: 'My Playlists' 
+              }}
+            />
+            <Stack.Screen 
+              name="playlistDetail" 
+              options={{ 
+                presentation: 'modal',
+                headerShown: true, 
+                title: 'Playlist'
+              }}
+            />
+          </Stack>
+          <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
+        </ThemeProvider>
+      </GestureHandlerRootView>
+    </CoupleProvider>
   );
 }

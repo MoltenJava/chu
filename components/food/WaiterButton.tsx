@@ -10,6 +10,14 @@ import {
 import { FontAwesome5 } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
+// Define new color palette (subset needed here)
+const colorBackground = '#FAFAFA'; // Off-white
+const colorTextPrimary = '#212121'; // Dark Gray
+const colorBorder = '#E0E0E0';     // Light Gray
+const colorAccent = '#FF6F61';     // Coral Pink
+const colorWhite = '#FFFFFF';
+const colorShadow = '#BDBDBD';     // Medium Gray for shadows
+
 interface WaiterButtonProps {
   onPress: (isActive: boolean) => void;
   isActive: boolean;
@@ -68,12 +76,18 @@ const WaiterButton: React.FC<WaiterButtonProps> = ({
     
   }, [isActive, onPress, lastToggleTime]);
   
-  // Interpolate animation for background color change
+  // Interpolate background color: white inactive, red active
   const backgroundColor = animation.interpolate({
     inputRange: [0, 1],
-    outputRange: ['white', '#FF3B5C']
+    outputRange: [colorWhite, colorAccent] 
   });
   
+  // Interpolate icon color: dark inactive, white active
+  const iconColor = animation.interpolate({
+    inputRange: [0, 1],
+    outputRange: [colorTextPrimary, colorWhite]
+  });
+
   return (
     <TouchableOpacity 
       onPress={handlePress}
@@ -83,13 +97,19 @@ const WaiterButton: React.FC<WaiterButtonProps> = ({
     >
       <RNAnimated.View style={[
         styles.button,
-        { backgroundColor }
+        { 
+          backgroundColor, // Animated background
+          borderColor: colorBorder, // Use light gray border
+          shadowColor: colorShadow, // Use medium gray shadow
+        }
       ]}>
-        <FontAwesome5 
-          name="user-tie" 
-          size={22} 
-          color={isActive ? "white" : "#FF3B5C"} 
-        />
+        {/* Apply animated color to icon via Text wrapper */}
+        <RNAnimated.Text style={{ color: iconColor }}>
+          <FontAwesome5 
+            name="user-tie" 
+            size={22} 
+          />
+        </RNAnimated.Text>
       </RNAnimated.View>
     </TouchableOpacity>
   );
@@ -108,13 +128,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#FF3B5C',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 3,
-    borderWidth: 1,
-    borderColor: '#ffccd5',
+    shadowOpacity: 0.2, // Reset opacity
+    shadowRadius: 3, // Reset radius
+    elevation: 3, // Reset elevation
+    borderWidth: 1, // Reset border width
   }
 });
 

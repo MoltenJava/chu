@@ -6,10 +6,13 @@ const ALPHA_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const NUM_CHARS = "0123456789";
 const SCRAMBLE_CHARS = ALPHA_CHARS + NUM_CHARS;
 
+// --- MODIFIED: Add 'complete' to AnimationState type ---
+type AnimationState = 'idle' | 'scrambling' | 'complete';
+
 interface FlipCharProps {
   currentChar: string;
   targetChar: string;
-  animationState: 'idle' | 'scrambling' | 'complete';
+  animationState: AnimationState; // Use updated type
   delay: number;
   duration?: number;
   style?: any;
@@ -32,131 +35,124 @@ const FlipChar: React.FC<FlipCharProps> = ({
   const animationRef = useRef<NodeJS.Timeout | null>(null);
   const isEmptySpace = currentChar === ' ' && targetChar === ' ' && !forceFlip;
   
-  // Generate scramble sequence when animation starts
+  // Generate scramble sequence ONLY when state becomes scrambling
   useEffect(() => {
-    if (animationState !== 'scrambling' || (isEmptySpace && !forceFlip)) {
-      return;
-    }
-    
-    // Generate random intermediate characters
-    const numSteps = 16;
-    const chars = [currentChar]; // Start with current character
-    
-    // Phase 1: Completely random (first ~30% of animation)
-    const randomPhase = Math.floor(numSteps * 0.3);
-    for (let i = 0; i < randomPhase; i++) {
-      chars.push(SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)]);
-    }
-    
-    // Phase 2: Gradually increasing probability of target (middle ~40% of animation)
-    const transitionPhase = Math.floor(numSteps * 0.4);
-    for (let i = 0; i < transitionPhase; i++) {
-      const progress = i / transitionPhase;
-      const useTargetChar = Math.random() < progress * 0.6;
-      
-      if (useTargetChar) {
+    if (animationState === 'scrambling' && !(isEmptySpace && !forceFlip)) {
+        // --- Generation logic moved here --- 
+        const numSteps = 16;
+        const chars = [currentChar]; 
+        const randomPhase = Math.floor(numSteps * 0.3);
+        for (let i = 0; i < randomPhase; i++) {
+          chars.push(SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)]);
+        }
+        const transitionPhase = Math.floor(numSteps * 0.4);
+        for (let i = 0; i < transitionPhase; i++) {
+          const progress = i / transitionPhase;
+          const useTargetChar = Math.random() < progress * 0.6;
+          if (useTargetChar) {
+            chars.push(targetChar);
+          } else {
+            chars.push(SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)]);
+          }
+        }
+        const settlingPhase = numSteps - randomPhase - transitionPhase - 1;
+        const targetIndex = SCRAMBLE_CHARS.indexOf(targetChar);
+        let nearbyChars = [];
+        if (targetIndex >= 0) {
+          for (let offset = -2; offset <= 2; offset++) {
+            if (offset === 0) continue;
+            const nearbyIndex = (targetIndex + offset + SCRAMBLE_CHARS.length) % SCRAMBLE_CHARS.length;
+            nearbyChars.push(SCRAMBLE_CHARS[nearbyIndex]);
+          }
+        } else {
+          nearbyChars = [
+            SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)],
+            SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)],
+          ];
+        }
+        for (let i = 0; i < settlingPhase; i++) {
+          if (i % 2 === 0 || Math.random() < i / settlingPhase * 0.8) {
+            chars.push(targetChar);
+          } else {
+            chars.push(nearbyChars[Math.floor(Math.random() * nearbyChars.length)]);
+          }
+        }
         chars.push(targetChar);
-      } else {
-        chars.push(SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)]);
-      }
-    }
-    
-    // Phase 3: "Settling" pattern (last ~30% of animation)
-    const settlingPhase = numSteps - randomPhase - transitionPhase - 1;
-    
-    // Get characters "near" the target in the alphabet
-    const targetIndex = SCRAMBLE_CHARS.indexOf(targetChar);
-    let nearbyChars = [];
-    
-    if (targetIndex >= 0) {
-      for (let offset = -2; offset <= 2; offset++) {
-        if (offset === 0) continue;
-        const nearbyIndex = (targetIndex + offset + SCRAMBLE_CHARS.length) % SCRAMBLE_CHARS.length;
-        nearbyChars.push(SCRAMBLE_CHARS[nearbyIndex]);
-      }
+        chars.push(targetChar);
+        setIntermediateChars(chars);
+        // --- End of generation logic ---
     } else {
-      nearbyChars = [
-        SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)],
-        SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)],
-      ];
+        // Clear intermediate chars if not scrambling
+        setIntermediateChars([]);
     }
-    
-    // Create oscillating pattern between target and nearby chars
-    for (let i = 0; i < settlingPhase; i++) {
-      if (i % 2 === 0 || Math.random() < i / settlingPhase * 0.8) {
-        chars.push(targetChar);
-      } else {
-        chars.push(nearbyChars[Math.floor(Math.random() * nearbyChars.length)]);
-      }
-    }
-    
-    // Always end with the target character
-    chars.push(targetChar);
-    chars.push(targetChar);
-    
-    setIntermediateChars(chars);
-  }, [currentChar, targetChar, animationState, isEmptySpace, forceFlip]);
-  
-  // Run the animation when animationState changes
+  }, [currentChar, targetChar, animationState, isEmptySpace, forceFlip]); // Keep dependencies
+
+  // Run the animation effect based on state and intermediateChars
   useEffect(() => {
-    // Clear any ongoing animations
+    // Clear any ongoing animations first
     if (animationRef.current) {
       clearTimeout(animationRef.current);
       animationRef.current = null;
     }
-    
-    // Reset rotation
-    flipRotation.setValue(0);
-    
-    // Handle different animation states
+    flipRotation.setValue(0); // Reset rotation visually
+
+    // Handle states
     switch (animationState) {
       case 'idle':
-        // Just show the current character
-        setDisplayChar(currentChar);
+        setDisplayChar(currentChar); // Show the stable current character
         break;
-        
+
       case 'complete':
-        // Show the target character
-        setDisplayChar(targetChar);
+        setDisplayChar(targetChar); // Show the final target character (no animation)
         break;
-        
+
       case 'scrambling':
         // Skip animation for empty spaces unless forced
         if (isEmptySpace && !forceFlip) {
-          setDisplayChar(currentChar);
+          setDisplayChar(currentChar); // Show space immediately
           return;
         }
-        
-        // If no intermediate chars yet, show current char
+
+        // Ensure intermediate characters are generated before starting
         if (intermediateChars.length === 0) {
-          setDisplayChar(currentChar);
-          return;
+           setDisplayChar(currentChar);
+           return; 
         }
         
-        // Start the animation sequence
+        // --- Animation Logic --- 
         let currentStep = 0;
         const totalSteps = intermediateChars.length;
-        
+
         const runStep = () => {
+          // --- Revised Stop Conditions ---
           if (currentStep >= totalSteps) {
             setDisplayChar(targetChar);
             return;
           }
-          
-          // Update the displayed character
+
+          if (animationState !== 'scrambling') {
+             if (animationState === 'complete') {
+                setDisplayChar(targetChar);
+             }
+             return;
+          }
+          // --- End of Stop Conditions ---
+
+          // If we reach here, state is 'scrambling' and currentStep < totalSteps.
+          // Proceed with the animation step...
           setDisplayChar(intermediateChars[currentStep]);
-          
-          // Calculate timing adjustments
+
+          // Calculate timing adjustments (same as before)
           const isSettlingPhase = currentStep > totalSteps * 0.7;
           const stepDuration = duration / totalSteps;
-          const adjustedDuration = isSettlingPhase 
-            ? stepDuration * (1 + (currentStep / totalSteps) * 0.5)
+          const settlingProgress = isSettlingPhase ? (currentStep - totalSteps * 0.7) / (totalSteps * 0.3) : 0;
+          const adjustedDuration = isSettlingPhase
+            ? stepDuration * (1 + settlingProgress * 1.5)
             : stepDuration;
-          
           const easingFunction = isSettlingPhase
-            ? Easing.out(Easing.bounce)
+            ? Easing.out(Easing.quad)
             : Easing.out(Easing.cubic);
-          
+
           // Animate the flip
           Animated.timing(flipRotation, {
             toValue: 1,
@@ -164,41 +160,43 @@ const FlipChar: React.FC<FlipCharProps> = ({
             easing: easingFunction,
             useNativeDriver: true
           }).start(() => {
+            if (animationState !== 'scrambling') {
+                 if (animationState === 'complete') setDisplayChar(targetChar);
+                 return;
+            }
+
             flipRotation.setValue(0);
             currentStep++;
-            
+
+            // Schedule next step ONLY if state is still 'scrambling' and steps remain
             if (currentStep < totalSteps) {
-              // Gap gradually increases during settling phase
-              const gapTime = isSettlingPhase
-                ? 10 + (currentStep / totalSteps) * 40
-                : 10;
-                
-              animationRef.current = setTimeout(runStep, gapTime);
+                 // Calculate gapTime based on isSettlingPhase (need this value from before)
+                 const currentIsSettlingPhase = currentStep -1 > totalSteps * 0.7; // Check based on the step that just finished
+                 const currentSettlingProgress = currentIsSettlingPhase ? ((currentStep -1) - totalSteps * 0.7) / (totalSteps * 0.3) : 0;
+                 const gapTime = currentIsSettlingPhase
+                    ? 10 + currentSettlingProgress * 60
+                    : 10;
+                 animationRef.current = setTimeout(runStep, gapTime);
+            } else {
+                  setDisplayChar(targetChar);
             }
           });
         };
         
-        // Start after delay
+        // Start after initial delay
         animationRef.current = setTimeout(runStep, delay);
         break;
     }
-    
+
+    // Cleanup function
     return () => {
       if (animationRef.current) {
         clearTimeout(animationRef.current);
+        animationRef.current = null;
       }
     };
-  }, [
-    currentChar, 
-    targetChar, 
-    animationState, 
-    delay, 
-    duration, 
-    flipRotation, 
-    intermediateChars, 
-    isEmptySpace, 
-    forceFlip
-  ]);
+  // Dependencies: intermediateChars is important now because generation is in another effect
+  }, [currentChar, targetChar, animationState, delay, duration, flipRotation, intermediateChars, isEmptySpace, forceFlip]);
   
   // Create the rotation transform
   const flipStyle = {
@@ -244,9 +242,6 @@ const FlipChar: React.FC<FlipCharProps> = ({
     </View>
   );
 };
-
-// Three-state animation approach
-type AnimationState = 'idle' | 'scrambling' | 'complete';
 
 interface SplitFlapTextProps {
   words: string[];
@@ -314,49 +309,44 @@ const SplitFlapText: React.FC<SplitFlapTextProps> = ({
     // Use REF value instead of state directly
     const nextIndex = (currentWordIndexRef.current + 1) % words.length;
     
-    console.log(`[Cycle ${cycleCount}] Transitioning from word ${currentWordIndexRef.current} (${words[currentWordIndexRef.current]}) to ${nextIndex} (${words[nextIndex]})`);
-    
-    // Calculate target characters
     const nextWord = words[nextIndex].toUpperCase();
     const nextChars = centerWord(nextWord);
     
-    // Set the target but keep displaying current chars
+    // 1. Set TARGET characters
     setTargetChars(nextChars);
-    
-    // Start the scrambling animation
+
+    // 2. Set state to SCRAMBLING (triggers FlipChar animation)
     setAnimationState('scrambling');
-    
-    // After animation completes
-    const timer = setTimeout(() => {
-      console.log(`[Cycle ${cycleCount}] Animation complete, updating to show word ${nextIndex}`);
-      
-      // Update displayed word AND the ref
-      setCurrentWordIndex(nextIndex);
-      currentWordIndexRef.current = nextIndex;  // <-- THIS IS KEY
-      setCurrentChars(nextChars);
-      
-      // Reset animation state
-      setAnimationState('idle');
-      
-      // Clear any existing timeout
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
-      }
-      
-      // Schedule next transition
-      const nextDelay = transitionInterval - spinDuration;
-      console.log(`[Cycle ${cycleCount}] Scheduling next transition in ${nextDelay}ms`);
-      
+    lastTransitionTimeRef.current = Date.now(); // Update last transition time
+
+    // Clear previous main cycle timer if any
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+    // 3. Schedule end of visual scramble animation
+    timeoutRef.current = setTimeout(() => {
+      // 4. Set state to COMPLETE - FlipChar will show targetChar now
+      setAnimationState('complete');
+
+      // 5. Schedule the logical update and the *next* transition start
+      // Use a short delay to allow 'complete' state to render
+      const logicalUpdateDelay = 50; 
       timeoutRef.current = setTimeout(() => {
-        console.log(`[Cycle ${cycleCount}] Starting next transition sequence`);
-        // The startNextWordTransition function will get the latest currentWordIndex
-        startNextWordTransition();
-      }, Math.max(nextDelay, 500)); // Ensure a minimum delay
-    }, spinDuration);
-    
-    // Store the timer for cleanup
-    timeoutRef.current = timer;
+         // 6. Update CURRENT characters to match target
+         setCurrentChars(nextChars);
+         // 7. Update word index (state and ref)
+         setCurrentWordIndex(nextIndex);
+         currentWordIndexRef.current = nextIndex;
+         // 8. Set state back to IDLE
+         setAnimationState('idle');
+
+         // 9. Schedule the actual next transition
+         const nextInterval = transitionInterval; // Use the full interval from now
+         timeoutRef.current = setTimeout(startNextWordTransition, Math.max(nextInterval, 500));
+
+      }, logicalUpdateDelay);
+
+    }, spinDuration); // spinDuration marks end of allowed scramble time
+
   };
   
   // Initialize on mount
@@ -376,7 +366,7 @@ const SplitFlapText: React.FC<SplitFlapTextProps> = ({
       clearTimeout(timeoutRef.current);
     }
     
-    console.log('Component mounted, scheduling first transition');
+    lastTransitionTimeRef.current = Date.now();
     timeoutRef.current = setTimeout(() => {
       startNextWordTransition();
     }, transitionInterval);
@@ -387,44 +377,7 @@ const SplitFlapText: React.FC<SplitFlapTextProps> = ({
         timeoutRef.current = null;
       }
     };
-  }, [words, fixedNumChars]);
-  
-  // Failsafe watchdog timer to recover from stalls
-  useEffect(() => {
-    const watchdogTimer = setTimeout(() => {
-      const timeSinceLastTransition = Date.now() - lastTransitionTimeRef.current;
-      
-      // If it's been too long since the last transition (over 1.5x the expected time)
-      if (timeSinceLastTransition > transitionInterval * 1.5) {
-        console.log(`Watchdog: Detected potential stall (${timeSinceLastTransition}ms since last transition)`);
-        
-        // Force a fresh start with the next word
-        const nextIndex = (currentWordIndex + 1) % words.length;
-        console.log(`Watchdog: Forcing transition to word ${nextIndex}`);
-        
-        // Clear any existing timeouts
-        if (timeoutRef.current) {
-          clearTimeout(timeoutRef.current);
-          timeoutRef.current = null;
-        }
-        
-        // Reset state and force move to next word
-        setAnimationState('idle');
-        setCurrentWordIndex(nextIndex);
-        currentWordIndexRef.current = nextIndex;
-        setCurrentChars(centerWord(words[nextIndex].toUpperCase()));
-        
-        // Schedule a fresh transition
-        console.log('Watchdog: Scheduling recovery transition');
-        lastTransitionTimeRef.current = Date.now(); // Reset the timer
-        timeoutRef.current = setTimeout(startNextWordTransition, 1000);
-      }
-    }, transitionInterval); // Check once per expected cycle
-    
-    return () => {
-      clearTimeout(watchdogTimer);
-    };
-  });
+  }, [words, fixedNumChars, transitionInterval]);
   
   return (
     <View style={[styles.container, style]}>
@@ -485,43 +438,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(156, 0, 0, 0.9)',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+    backgroundColor: '#FF6F61',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
     borderRadius: 4,
-    // Add shadow for depth
     ...Platform.select({
       ios: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 2,
       },
       android: {
-        elevation: 6,
+        elevation: 3,
       },
     }),
     position: 'relative',
   },
   charContainer: {
-    width: 28,
-    height: 38,
-    margin: 2,
+    width: 22,
+    height: 30,
+    margin: 1.5,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#2a0000',
+    backgroundColor: '#212121',
     borderRadius: 2,
     overflow: 'hidden',
-    // Enhanced bevel effect for more mechanical appearance
-    borderTopWidth: 1.5,
-    borderTopColor: 'rgba(255,255,255,0.25)',
-    borderLeftWidth: 1.5,
-    borderLeftColor: 'rgba(255,255,255,0.15)',
-    borderRightWidth: 1.5,
-    borderRightColor: 'rgba(0,0,0,0.4)',
-    borderBottomWidth: 1.5,
-    borderBottomColor: 'rgba(0,0,0,0.3)',
-    // Add inner shadow
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.15)',
+    borderLeftWidth: 1,
+    borderLeftColor: 'rgba(255, 255, 255, 0.1)',
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(0, 0, 0, 0.4)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0, 0, 0, 0.5)',
     ...Platform.select({
       ios: {
         shadowColor: '#000',
@@ -530,21 +480,20 @@ const styles = StyleSheet.create({
         shadowRadius: 1,
       },
       android: {
-        elevation: 2,
+        elevation: 1,
       },
     }),
   },
   flipChar: {
-    fontSize: 26,
+    fontSize: 20,
     color: 'white',
     fontWeight: '700',
     textAlign: 'center',
     textTransform: 'uppercase',
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    // Enhanced text shadow for dimensional appearance
-    textShadowColor: 'rgba(0, 0, 0, 0.8)',
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 1.5,
+    textShadowRadius: 1,
     letterSpacing: -0.5,
   },
   emptyChar: {
@@ -554,9 +503,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: '100%',
     height: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
     top: '50%',
-    // Add subtle highlight below separator
     borderBottomWidth: 0.5,
     borderBottomColor: 'rgba(255, 255, 255, 0.1)',
   }
