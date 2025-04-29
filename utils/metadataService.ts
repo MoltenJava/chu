@@ -5,6 +5,10 @@ const S3_BASE_URL = 'https://test-westwood.s3.us-west-1.amazonaws.com';
 // Path to the metadata file in your S3 bucket
 const METADATA_URL = 'https://test-westwood.s3.us-west-1.amazonaws.com/westwood_restaurant_metadata.json';
 
+// Add a console log to confirm this file is being used
+console.log('[METADATA] Using S3 bucket:', S3_BASE_URL);
+console.log('[METADATA] Metadata URL:', METADATA_URL);
+
 // Interface for the raw metadata from the JSON file - updated to match actual format
 interface RestaurantMetadataItem {
   title: string;
@@ -151,6 +155,11 @@ const convertToFoodItem = (imagePath: string, item: RestaurantMetadataItem, inde
   // Debug the raw values from the metadata
   console.log(`Raw latitude: ${item.latitude}, Raw longitude: ${item.longitude}, Raw price: ${item.price}, Raw price_level: ${item.price_level}`);
   
+  // Ensure the restaurant title is never undefined or empty
+  const restaurantName = item.title && item.title.trim() !== '' 
+    ? item.title 
+    : `Restaurant ${index + 1}`;
+  
   // Extract delivery services
   const deliveryServices: string[] = [];
   const deliveryUrls: { uberEats?: string; postmates?: string; doorDash?: string } = {};
@@ -256,10 +265,10 @@ const convertToFoodItem = (imagePath: string, item: RestaurantMetadataItem, inde
   
   return {
     id: `${index + 1}`,
-    name: item.menu_item,
+    name: item.menu_item || `Menu Item ${index + 1}`,
     description: description,
     imageUrl: item.s3_url || `${S3_BASE_URL}${imagePath}`,
-    restaurant: item.title,
+    restaurant: restaurantName,
     price: priceLevel,
     cuisine: 'Various', // Default cuisine since it's not in the metadata
     foodType: foodTypes,
@@ -277,7 +286,12 @@ export const fetchRestaurantMetadata = async (): Promise<FoodItem[]> => {
   try {
     console.log('Fetching metadata from:', METADATA_URL);
     
-    const response = await fetch(METADATA_URL);
+    const response = await fetch(METADATA_URL, {
+      // Add cache control to avoid stale data
+      headers: {
+        'Cache-Control': 'no-cache'
+      }
+    });
     
     console.log('Response status:', response.status);
     
@@ -403,4 +417,128 @@ export const loadLocalMetadata = async (localPath: string): Promise<FoodItem[]> 
     console.error('Error loading local metadata:', error);
     return [];
   }
+};
+
+/**
+ * Provides a backup local dataset to use if the S3 fetch fails
+ * This is especially useful for TestFlight builds where S3 access might fail
+ */
+export const getBackupMetadata = (): FoodItem[] => {
+  console.log('[METADATA] Using backup restaurant data');
+  
+  // Create restaurant objects to match expected structure
+  const createRestaurantObject = (name: string) => {
+    return {
+      id: name.toLowerCase().replace(/\s+/g, '-'),
+      name: name,
+      address: 'Westwood, Los Angeles, CA',
+      price_range: null,
+      latitude: 34.0611701,
+      longitude: -118.4462,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      place_id: `place-${name.toLowerCase().replace(/\s+/g, '-')}`
+    };
+  };
+  
+  // Create a minimal set of restaurant data that will work without network
+  const backupData: FoodItem[] = [
+    // Add several examples with different restaurants
+    {
+      id: '1',
+      name: 'Spicy Ramen Bowl',
+      description: 'Authentic Japanese ramen with spicy miso broth, topped with soft-boiled egg',
+      imageUrl: 'https://images.unsplash.com/photo-1557872943-16a5ac26437e',
+      restaurant: createRestaurantObject('Ramen House'),
+      price: '$$',
+      cuisine: 'Japanese',
+      foodType: ['spicy', 'dinner', 'comfort'],
+      deliveryServices: ['UberEats', 'DoorDash'],
+      deliveryUrls: {
+        uberEats: 'https://www.ubereats.com',
+        doorDash: 'https://www.doordash.com'
+      },
+      address: 'Westwood, Los Angeles, CA',
+      coordinates: {
+        latitude: 34.0611701,
+        longitude: -118.4462
+      }
+    },
+    {
+      id: '2',
+      name: 'Classic Cheeseburger',
+      description: 'Juicy beef patty with melted cheddar cheese, lettuce, tomato, and special sauce',
+      imageUrl: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd',
+      restaurant: createRestaurantObject('Burger Joint'),
+      price: '$',
+      cuisine: 'American',
+      foodType: ['comfort', 'lunch', 'fast-food'],
+      deliveryServices: ['UberEats', 'Postmates'],
+      deliveryUrls: {
+        uberEats: 'https://www.ubereats.com',
+        postmates: 'https://www.postmates.com'
+      },
+      address: 'Westwood, Los Angeles, CA',
+      coordinates: {
+        latitude: 34.0611701,
+        longitude: -118.4462
+      }
+    },
+    {
+      id: '3',
+      name: 'Margherita Pizza',
+      description: 'Traditional Neapolitan pizza with tomato sauce, fresh mozzarella, and basil',
+      imageUrl: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002',
+      restaurant: createRestaurantObject('Pizzeria Bella'),
+      price: '$$',
+      cuisine: 'Italian',
+      foodType: ['comfort', 'dinner', 'lunch'],
+      deliveryServices: ['UberEats', 'DoorDash', 'Postmates'],
+      deliveryUrls: {
+        uberEats: 'https://www.ubereats.com',
+        doorDash: 'https://www.doordash.com',
+        postmates: 'https://www.postmates.com'
+      },
+      address: 'Westwood, Los Angeles, CA',
+      coordinates: {
+        latitude: 34.0611701,
+        longitude: -118.4462
+      }
+    }
+  ];
+  
+  // Add additional basic items for completeness
+  const restaurants = [
+    'Taj Spice', 'Brunch Café', 'Sushi Delight', 'Trattoria Milano', 
+    'Taqueria Fuego', 'Sweet Indulgence', 'Mediterranean Bistro'
+  ];
+  
+  const foods = [
+    'Butter Chicken', 'Avocado Toast', 'Sushi Platter', 'Pasta Carbonara',
+    'Chicken Tacos', 'Chocolate Lava Cake', 'Greek Salad'
+  ];
+  
+  restaurants.forEach((restaurant, index) => {
+    backupData.push({
+      id: `${index + 4}`,
+      name: foods[index],
+      description: `Delicious ${foods[index]} from ${restaurant}`,
+      imageUrl: `https://images.unsplash.com/photo-15${index}${index + 1}${index + 2}`,
+      restaurant: createRestaurantObject(restaurant),
+      price: index % 3 === 0 ? '$' : index % 3 === 1 ? '$$' : '$$$',
+      cuisine: 'Various',
+      foodType: ['comfort'],
+      deliveryServices: ['UberEats'],
+      deliveryUrls: {
+        uberEats: 'https://www.ubereats.com'
+      },
+      address: 'Westwood, Los Angeles, CA',
+      coordinates: {
+        latitude: 34.0611701,
+        longitude: -118.4462
+      }
+    });
+  });
+  
+  return backupData;
 }; 

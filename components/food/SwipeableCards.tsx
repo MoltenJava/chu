@@ -111,7 +111,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   onNavigateToPlaylist
 }) => {
   // State Management Integration
-  const { coupleSession, setCoupleSession, user } = CoupleContext.useCoupleContext();
+  const { coupleSession: parteeSession, setCoupleSession: setParteeSession, user } = CoupleContext.useCoupleContext();
 
   // State
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -133,11 +133,13 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   const [activeTab, setActiveTab] = useState<'all' | 'favorites' | 'couple'>('all');
   const [waiterModeActive, setWaiterModeActive] = useState<boolean>(false);
   const [currentRestaurant, setCurrentRestaurant] = useState<string | null>(null);
-  const [showCoupleMode, setShowCoupleMode] = useState(false);
-  const [isJoinCoupleModalVisible, setIsJoinCoupleModalVisible] = useState(false);
-  const [isCoupleSessionModalVisible, setIsCoupleSessionModalVisible] = useState(false);
+  const [showParteeMode, setShowParteeMode] = useState(false);
+  const [isJoinParteeModalVisible, setIsJoinParteeModalVisible] = useState(false);
+  const [isParteeSessionModalVisible, setIsParteeSessionModalVisible] = useState(false);
   const [isSessionCreatedModalVisible, setIsSessionCreatedModalVisible] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  // Add state for party button
+  const [partyModeActive, setPartyModeActive] = useState<boolean>(false);
   // Add Realtime State
   const [matches, setMatches] = useState<CoupleMatch[]>([]);
   const [lastMatch, setLastMatch] = useState<CoupleMatch | null>(null);
@@ -150,7 +152,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   const [showSessionEndedToast, setShowSessionEndedToast] = useState(false);
   const sessionEndedToastAnim = useSharedValue(0);
   // --- Ref should track joined_by now --- 
-  const previousJoinedByIdRef = useRef<string | null | undefined>(coupleSession?.joined_by);
+  const previousJoinedByIdRef = useRef<string | null | undefined>(parteeSession?.joined_by);
 
   // Add state for expanded card
   const [expandingCardId, setExpandingCardId] = useState<string | null>(null);
@@ -445,20 +447,20 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   }, [activeData, currentIndex]);
 
   // Add handlers for couple mode
-  const handleCoupleModePress = useCallback(() => {
-    setShowCoupleMode(true);
+  const handleParteeModePress = useCallback(() => {
+    setShowParteeMode(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   }, []);
 
-  const handleCoupleModeExit = useCallback(() => {
-    setShowCoupleMode(false);
+  const handleParteeModeExit = useCallback(() => {
+    setShowParteeMode(false);
   }, []);
 
   // Handle swipe action
   const handleSwipe = useCallback(async (item: SupabaseMenuItem, direction: SwipeDirection) => {
     if (!isMountedRef.current || !user) return; // Ensure user exists too
     
-    const isCoupleMode = !!coupleSession;
+    const isParteeMode = !!parteeSession;
     const decision = direction === 'right';
     // Determine the correct food item ID (use 'id' if '_id' doesn't exist)
     const foodItemId = item.id || item._id;
@@ -471,15 +473,15 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         return;
     }
 
-    // --- Try recording swipe FIRST if in couple mode --- 
-    if (isCoupleMode) {
+    // --- Try recording swipe FIRST if in partee mode --- 
+    if (isParteeMode) {
         try {
-            console.log(`[CoupleMode] Recording swipe: S_ID=${coupleSession.id}, U_ID=${user.id}, F_ID=${foodItemId}, Decision=${decision}`);
-            await recordCoupleSwipe(coupleSession.id, user.id, foodItemId, decision);
-            // Swipe recorded successfully for couple mode
+            console.log(`[ParteeMode] Recording swipe: S_ID=${parteeSession.id}, U_ID=${user.id}, F_ID=${foodItemId}, Decision=${decision}`);
+            await recordCoupleSwipe(parteeSession.id, user.id, foodItemId, decision);
+            // Swipe recorded successfully for partee mode
         } catch (error) {
-            console.error('Error recording couple swipe:', error);
-            Alert.alert('Swipe Error', 'Could not record your swipe for the session. Please try again.');
+            console.error('Error recording partee swipe:', error);
+            Alert.alert('Swipe Error', 'Could not record your swipe for the partee. Please try again.');
             // Decide if we should block card progression on error
             // For now, let's allow progression
         }
@@ -497,8 +499,8 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
              .catch((err: Error) => console.error("Error saving item to default playlist:", err)); // Log error if background save fails
         }
 
-        // --- Trigger saved badge animation ONLY IF NOT in couple mode --- 
-        if (!coupleSession) {
+        // --- Trigger saved badge animation ONLY IF NOT in partee mode --- 
+        if (!parteeSession) {
           savedBadgeScale.value = withSequence(
             withSpring(1.2),
             withSpring(1)
@@ -528,7 +530,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       setCurrentIndex(prev => prev + 1);
     }
   }, [
-      coupleSession, 
+      parteeSession, 
       user,
       onLike, 
       onDislike, 
@@ -745,22 +747,17 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         <View style={styles.headerLeftContainer}>
           <TouchableOpacity 
             onPress={() => {
-              if (coupleSession) {
-                console.log('[SwipeableCards] Couple code tapped, opening modal.');
-                setIsCoupleSessionModalVisible(true);
-              } else {
-                 setIsOptionsModalVisible(true); 
-              }
+              // Logo no longer opens modals, just performs branding function
             }}
             activeOpacity={0.7}
             style={styles.logoTouchable}
           >
-            {coupleSession ? (
+            {parteeSession ? (
               <View style={styles.sessionCodeWrapper}>
-                <Text style={styles.sessionCodeLabel}>Couple Code:</Text>
                 <Text style={[styles.logoTextHeader, styles.sessionCodeHeader]}>
-                  {coupleSession.session_code}
+                  {parteeSession.session_code}
                 </Text>
+                <Text style={styles.sessionCodeLabel}>Partee Code</Text>
               </View>
             ) : (
               <Image 
@@ -776,6 +773,33 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         </View>
         
         <View style={styles.headerRightContainer}>
+          {/* Party Button */}
+          <TouchableOpacity
+            style={styles.partyButton}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              
+              // Conditional based on existing partee session
+              if (parteeSession) {
+                console.log('[SwipeableCards] Party button pressed with active session, opening session modal.');
+                setIsParteeSessionModalVisible(true);
+              } else {
+                console.log('[SwipeableCards] Party button pressed, opening options modal.');
+                setIsOptionsModalVisible(true);
+              }
+            }}
+            activeOpacity={0.6}
+          >
+            <View style={[styles.partyButtonInner, partyModeActive && styles.partyButtonActive]}>
+              <Text style={{fontSize: 20, color: partyModeActive ? "#FF3B5C" : colorTextPrimary}}>🎉</Text>
+            </View>
+          </TouchableOpacity>
+        
+          <WaiterButton
+            onPress={handleWaiterButtonPress}
+            isActive={waiterModeActive}
+          />
+
           <TouchableOpacity 
             style={styles.headerFilterButton} 
             onPress={handleHeaderFilterPress}
@@ -783,11 +807,6 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
           >
             <Text style={styles.headerFilterEmoji}>{currentFilterEmoji}</Text>
           </TouchableOpacity>
-
-          <WaiterButton
-            onPress={handleWaiterButtonPress}
-            isActive={waiterModeActive}
-          />
 
           {/* Saved Items Button */}
           <TouchableOpacity
@@ -810,39 +829,39 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       </View>
     );
   }, [
-    coupleSession,
+    parteeSession,
     waiterModeActive,
     handleWaiterButtonPress,
     handleHeaderFilterPress,
-    setIsCoupleSessionModalVisible,
+    setIsParteeSessionModalVisible,
     toggleSavedItems,
     savedItems.length,
     savedBadgeScaleStyle,
     selectedFilters,
     subcategoryFilters,
+    partyModeActive,
   ]);
 
   // Moved handleEndCoupleSession definition before renderHeader
-  const handleEndCoupleSession = async () => {
-    if (!coupleSession) return;
+  const handleEndParteeSession = async () => {
+    if (!parteeSession) return;
 
     Alert.alert(
-      "End Session",
-      "Are you sure you want to end this couple session for both users?",
+      "End Partee",
+      "Are you sure you want to end this partee for everyone?",
       [
         { text: "Cancel", style: "cancel" },
         { 
-          text: "End Session", 
+          text: "End Partee", 
           style: "destructive",
           onPress: async () => {
-            setIsCoupleSessionModalVisible(false);
+            setIsParteeSessionModalVisible(false);
             try {
-              await endSession(coupleSession.id);
-              setCoupleSession(null);
-              Alert.alert('Session Ended', 'The couple session has been closed.');
+              await endSession(parteeSession.id);
+              setParteeSession(null);
             } catch (error) {
-              console.error('Error ending couple session:', error);
-              Alert.alert('Error', 'Failed to end the session. Please try again.');
+              console.error('Error ending partee session:', error);
+              Alert.alert('Error', 'Failed to end the partee. Please try again.');
             }
           }
         }
@@ -850,21 +869,21 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     );
   };
 
-  const handleShareCoupleCode = () => {
-    if (!coupleSession) return;
+  const handleShareParteeCode = () => {
+    if (!parteeSession) return;
     Share.share({
-      message: `Join my Chewzee couple session! Use code: ${coupleSession.session_code}`,
-      title: 'Join Chewzee Couple Session'
+      message: `Join my Chewzee partee! Use code: ${parteeSession.session_code}`,
+      title: 'Join Chewzee Partee'
     }).catch(error => {
-        console.error('Error sharing session code:', error);
-        Alert.alert('Sharing Failed', 'Could not share the session code.');
+        console.error('Error sharing partee code:', error);
+        Alert.alert('Sharing Failed', 'Could not share the partee code.');
     });
   };
 
-  const handleCopyCoupleCode = () => {
-    if (!coupleSession) return;
-    Clipboard.setString(coupleSession.session_code);
-    Alert.alert('Copied', 'Session code copied to clipboard.');
+  const handleCopyParteeCode = () => {
+    if (!parteeSession) return;
+    Clipboard.setString(parteeSession.session_code);
+    Alert.alert('Copied', 'Partee code copied to clipboard.');
   };
 
   // --- Expansion Handling --- 
@@ -1006,25 +1025,25 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
 
   // --- Update ref based on joined_by --- 
   useEffect(() => {
-    if (!coupleSession) {
+    if (!parteeSession) {
       console.log("[Ref Update Effect] Session is null, setting previousJoinedByIdRef to null");
       previousJoinedByIdRef.current = null;
     } else {
       // Update if session changes but isn't null
-       if(previousJoinedByIdRef.current !== coupleSession.joined_by){
-           console.log(`[Ref Update Effect] Session changed, updating ref to: ${coupleSession.joined_by}`);
-           previousJoinedByIdRef.current = coupleSession.joined_by;
+       if(previousJoinedByIdRef.current !== parteeSession.joined_by){
+           console.log(`[Ref Update Effect] Session changed, updating ref to: ${parteeSession.joined_by}`);
+           previousJoinedByIdRef.current = parteeSession.joined_by;
        } 
     }
-  }, [coupleSession]); 
+  }, [parteeSession]); 
 
   // --- RE-ADD Effect for Fetching Initial Matches --- 
   useEffect(() => {
     const fetchInitialMatches = async () => {
-      if (coupleSession?.id) {
-        console.log(`[SwipeableCards] Fetching initial match IDs for session: ${coupleSession.id}`);
+      if (parteeSession?.id) {
+        console.log(`[SwipeableCards] Fetching initial match IDs for session: ${parteeSession.id}`);
         try {
-          const initialMatchIds = await getSessionMatchIds(coupleSession.id);
+          const initialMatchIds = await getSessionMatchIds(parteeSession.id);
           setSessionMatchIds(initialMatchIds);
         } catch (error) {
           console.error("Error fetching initial session match IDs:", error);
@@ -1034,11 +1053,11 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       }
     };
     fetchInitialMatches();
-  }, [coupleSession?.id]);
+  }, [parteeSession?.id]);
 
   // --- Effect for Realtime Subscriptions --- 
   useEffect(() => {
-    if (!coupleSession?.id || !user?.id) {
+    if (!parteeSession?.id || !user?.id) {
       if (previousJoinedByIdRef.current !== null) {
           console.log("[Realtime Effect] No session, ensuring ref is null");
           previousJoinedByIdRef.current = null; 
@@ -1046,7 +1065,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       return; 
     }
     
-    console.log(`[REALTIME] Subscribing to channels for session: ${coupleSession.id}. Initial Ref joined_by: ${previousJoinedByIdRef.current}`);
+    console.log(`[REALTIME] Subscribing to channels for session: ${parteeSession.id}. Initial Ref joined_by: ${previousJoinedByIdRef.current}`);
     
     let matchesChannel: RealtimeChannel | null = null;
     let swipesChannel: RealtimeChannel | null = null;
@@ -1054,14 +1073,14 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
 
     // --- Subscribe to Matches (Trigger Badge Animation) --- 
     matchesChannel = supabase
-      .channel(`couple-matches-${coupleSession.id}`)
+      .channel(`couple-matches-${parteeSession.id}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'couple_matches',
-          filter: `session_id=eq.${coupleSession.id}`,
+          filter: `session_id=eq.${parteeSession.id}`,
         },
         (payload) => {
           console.log('[REALTIME] New Match Received:', payload.new);
@@ -1097,14 +1116,14 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
 
     // --- Subscribe to Swipes (MODIFIED for Reordering) --- 
     swipesChannel = supabase
-      .channel(`couple-swipes-${coupleSession.id}`)
+      .channel(`couple-swipes-${parteeSession.id}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'couple_swipes',
-          filter: `session_id=eq.${coupleSession.id}`,
+          filter: `session_id=eq.${parteeSession.id}`,
         },
         (payload) => {
           const newSwipe = payload.new as CoupleSwipe;
@@ -1176,14 +1195,14 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
 
     // --- Subscribe to Session Updates (Check status) --- 
     sessionChannel = supabase
-      .channel(`couple-session-updates-${coupleSession.id}`)
+      .channel(`couple-session-updates-${parteeSession.id}`)
       .on(
         'postgres_changes',
         {
           event: 'UPDATE',
           schema: 'public',
           table: 'couple_sessions',
-          filter: `id=eq.${coupleSession.id}`,
+          filter: `id=eq.${parteeSession.id}`,
         },
         (payload) => {
           console.log('[REALTIME] Session Updated Event Received:', payload.new);
@@ -1209,7 +1228,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
           }
           
           // --- Check if Session Ended (using status, trigger toast) --- 
-          if (updatedSession.status === 'completed' && coupleSession?.status !== 'completed') {
+          if (updatedSession.status === 'completed' && parteeSession?.status !== 'completed') {
             console.log('[REALTIME] Session ended detected (status=completed)!');
             // Trigger Session Ended Toast
             runOnJS(setShowSessionEndedToast)(true);
@@ -1222,11 +1241,9 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
             }, 3000);
             
             // Still clear the local session state
-            runOnJS(setCoupleSession)(null); 
-            // ** REMOVE Alert.alert call **
-            // runOnJS(Alert.alert)("Session Ended", "The couple session has been closed.");
-          } else if (coupleSession?.id === updatedSession.id) { 
-             runOnJS(setCoupleSession)(updatedSession); 
+            runOnJS(setParteeSession)(null); 
+          } else if (parteeSession?.id === updatedSession.id) { 
+             runOnJS(setParteeSession)(updatedSession); 
           }
 
           // Update the joined_by ref AFTER processing
@@ -1242,7 +1259,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
 
     // --- Cleanup --- 
     return () => {
-       console.log(`[REALTIME] Unsubscribing from channels for session: ${coupleSession.id}`);
+       console.log(`[REALTIME] Unsubscribing from channels for session: ${parteeSession.id}`);
        if (matchesChannel) supabase.removeChannel(matchesChannel).catch(err => console.warn("Error removing matches channel:", err));
        if (swipesChannel) supabase.removeChannel(swipesChannel).catch(err => console.warn("Error removing swipes channel:", err));
        if (sessionChannel) supabase.removeChannel(sessionChannel).catch(err => console.warn("Error removing session channel:", err));
@@ -1250,12 +1267,12 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
          clearTimeout(swipeThrottleRef.current);
        }
     };
-  }, [coupleSession, user?.id, setCoupleSession, matchToastAnim, partnerJoinedToastAnim, sessionEndedToastAnim, swipeHistory]); 
+  }, [parteeSession, user?.id, setParteeSession, matchToastAnim, partnerJoinedToastAnim, sessionEndedToastAnim, swipeHistory]); 
 
   // NEW Handler to initiate session creation - UPDATED
   const handleInitiateCreateSession = useCallback(async () => {
     if (!user) {
-      Alert.alert("Error", "You must be logged in to create a session.");
+      Alert.alert("Error", "You must be logged in to start a partee.");
       return;
     }
     
@@ -1270,7 +1287,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       console.log('[SwipeableCards] Session created successfully:', newSession);
       
       // Success: Update context, THEN close options modal, then open success modal
-      setCoupleSession(newSession); 
+      setParteeSession(newSession); 
       setIsOptionsModalVisible(false); // Close options modal *after* success
       setIsSessionCreatedModalVisible(true); 
       
@@ -1284,7 +1301,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     } finally {
        setIsCreatingSession(false); // Turn off loading state regardless of outcome
     }
-  }, [user, setCoupleSession, createCoupleSession, setIsOptionsModalVisible, setIsSessionCreatedModalVisible]); // Added modal setters to dependencies
+  }, [user, setParteeSession, createCoupleSession, setIsOptionsModalVisible, setIsSessionCreatedModalVisible]); // Added modal setters to dependencies
 
   // Function to open settings modal (closes saved items first)
   const openSettingsModal = useCallback(() => {
@@ -1293,6 +1310,11 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         setIsSettingsModalVisible(true);
      }, 300); 
   }, []);
+
+  // Update effect to set party mode active based on session existence
+  useEffect(() => {
+    setPartyModeActive(!!parteeSession);
+  }, [parteeSession]);
 
   // Improve z-index and card container structure to prevent image peeking
   return (
@@ -1360,7 +1382,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
           savedItems={savedItems}
           onWaiterMode={handleWaiterButtonPress}
           activeRestaurant={currentRestaurant}
-          coupleSession={coupleSession}
+          coupleSession={parteeSession}
           sessionMatchIds={sessionMatchIds}
           onOpenSettings={openSettingsModal}
         />
@@ -1379,12 +1401,12 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         />
 
         {/* Couple Mode */}
-        {showCoupleMode && (
+        {showParteeMode && (
           <Modal
             animationType="slide"
             transparent={false}
-            visible={showCoupleMode}
-            onRequestClose={() => setShowCoupleMode(false)}
+            visible={showParteeMode}
+            onRequestClose={handleParteeModeExit}
           >
             <CoupleModeScreen
               foodItems={data}
@@ -1400,7 +1422,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
           onJoin={() => {
              // Keep existing join logic: close options, open join
              setIsOptionsModalVisible(false);
-             setIsJoinCoupleModalVisible(true);
+             setIsJoinParteeModalVisible(true);
           }}
           isLoading={isCreatingSession} // Pass the loading state
         />
@@ -1409,7 +1431,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         <SessionCreatedModal
           visible={isSessionCreatedModalVisible}
           onClose={() => setIsSessionCreatedModalVisible(false)}
-          session={coupleSession} // Pass the current session state
+          session={parteeSession} // Pass the current session state
         />
 
         {/* Match Toast Notification */} 
@@ -1433,35 +1455,35 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
           </Animated.View>
         )}
 
-        {/* Add Couple Session Modal */}
-        {coupleSession && (
+        {/* Update Session Modal - Use correct state variable */}
+        {parteeSession && (
           <Modal
             animationType="slide"
             transparent={true}
-            visible={isCoupleSessionModalVisible}
-            onRequestClose={() => setIsCoupleSessionModalVisible(false)}
+            visible={isParteeSessionModalVisible}
+            onRequestClose={() => setIsParteeSessionModalVisible(false)}
           >
-            <Pressable style={styles.modalOverlay} onPress={() => setIsCoupleSessionModalVisible(false)}> 
+            <Pressable style={styles.modalOverlay} onPress={() => setIsParteeSessionModalVisible(false)}> 
               <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}> 
-                <Text style={styles.modalTitle}>Couple Session</Text>
-                <Text style={styles.modalSessionCode}>Code: {coupleSession.session_code}</Text>
+                <Text style={styles.sessionCode}>{parteeSession.session_code}</Text>
+                <Text style={styles.modalSessionCode}>Partee Code</Text>
 
-                <TouchableOpacity style={styles.modalButton} onPress={handleShareCoupleCode}>
+                <TouchableOpacity style={styles.modalButton} onPress={handleShareParteeCode}>
                   <Ionicons name="share-social-outline" size={20} color="#007AFF" />
                   <Text style={styles.modalButtonText}>Share Code</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.modalButton} onPress={handleCopyCoupleCode}>
+                <TouchableOpacity style={styles.modalButton} onPress={handleCopyParteeCode}>
                   <Ionicons name="copy-outline" size={20} color="#007AFF" />
                   <Text style={styles.modalButtonText}>Copy Code</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={[styles.modalButton, styles.modalEndButton]} onPress={handleEndCoupleSession}>
+                <TouchableOpacity style={[styles.modalButton, styles.modalEndButton]} onPress={handleEndParteeSession}>
                    <MaterialIcons name="logout" size={20} color="#FF3B30" />
-                   <Text style={[styles.modalButtonText, styles.modalEndButtonText]}>End Session</Text>
+                   <Text style={[styles.modalButtonText, styles.modalEndButtonText]}>End Partee</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={[styles.modalButton, styles.modalCloseButton]} onPress={() => setIsCoupleSessionModalVisible(false)}>
+                <TouchableOpacity style={[styles.modalButton, styles.modalCloseButton]} onPress={() => setIsParteeSessionModalVisible(false)}>
                    <Text style={[styles.modalButtonText, styles.modalCloseButtonText]}>Close</Text>
                 </TouchableOpacity>
               </Pressable>
@@ -1469,14 +1491,14 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
           </Modal>
         )}
 
-        {/* Join Session Modal */}
+        {/* Join Session Modal - Use correct state variable */}
         <JoinSessionModal
-          visible={isJoinCoupleModalVisible}
-          onClose={() => setIsJoinCoupleModalVisible(false)}
+          visible={isJoinParteeModalVisible}
+          onClose={() => setIsJoinParteeModalVisible(false)}
           onSessionJoined={(session: CoupleSession) => {
-            setCoupleSession(session); 
-            setIsJoinCoupleModalVisible(false); 
-            Alert.alert("Joined!", "Successfully joined the couple session.");
+            setParteeSession(session); 
+            setIsJoinParteeModalVisible(false); 
+            Alert.alert("Joined!", "Successfully joined the partee.");
           }}
         />
 
@@ -1496,9 +1518,9 @@ const styles = StyleSheet.create({
   logoTouchable: { paddingVertical: 4 },
   logoImageHeader: { width: 120, height: 42, marginLeft: 0 },
   logoTextHeader: { fontSize: 24, fontWeight: '900', color: colorAccent, fontFamily: Platform.OS === 'ios' ? 'System' : 'sans-serif', letterSpacing: -0.5, marginLeft: 5, marginRight: 10 },
-  sessionCodeWrapper: { flexDirection: 'row', alignItems: 'baseline' },
-  sessionCodeLabel: { fontSize: 14, fontWeight: '500', color: '#666', marginRight: 4 },
-  sessionCodeHeader: { fontSize: 18, fontWeight: 'bold', color: '#FF3B5C' },
+  sessionCodeWrapper: { flexDirection: 'column', alignItems: 'center' },
+  sessionCodeLabel: { fontSize: 13, fontWeight: '500', color: '#666', marginTop: 2 },
+  sessionCodeHeader: { fontSize: 20, fontWeight: 'bold', color: '#FF3B5C', marginBottom: 0 },
   menuButton: { 
     width: 40, // Match WaiterButton container size
     height: 40, // Match WaiterButton container size
@@ -1526,6 +1548,32 @@ const styles = StyleSheet.create({
     justifyContent: 'center', 
     alignItems: 'center' 
   },
+  partyButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  partyButtonInner: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colorWhite,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colorBorder,
+    shadowColor: colorShadow,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  partyButtonActive: {
+    backgroundColor: '#FFF0ED',
+    borderColor: '#FF3B5C',
+  },
   badgeContainer: { 
     position: 'absolute', 
     top: -15, // Make more negative to move higher
@@ -1539,7 +1587,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6 
   },
   badgeText: { color: colorWhite, fontSize: 12, fontWeight: 'bold' },
-  headerFilterButton: { padding: 8, marginRight: 8, backgroundColor: '#FFF0ED', borderRadius: 20 },
+  headerFilterButton: { padding: 8, marginLeft: 8, backgroundColor: '#FFF0ED', borderRadius: 20 },
   filterEmojiOnly: { fontSize: 22 },
   headerFilterEmoji: { fontSize: 20 },
   matchToastContainer: { 
@@ -1588,7 +1636,8 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0, 0, 0, 0.5)' },
   modalContent: { width: '85%', backgroundColor: 'white', borderRadius: 20, padding: 25, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 5 },
   modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 10, color: '#333' },
-  modalSessionCode: { fontSize: 16, color: '#555', marginBottom: 25 },
+  sessionCode: { fontSize: 28, fontWeight: 'bold', color: colorAccent, marginBottom: 5, letterSpacing: 3 },
+  modalSessionCode: { fontSize: 15, color: '#555', marginBottom: 25 },
   modalButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F0F0', paddingVertical: 12, paddingHorizontal: 20, borderRadius: 10, marginBottom: 15, width: '100%', justifyContent: 'center' },
   modalButtonText: { fontSize: 17, marginLeft: 10, color: '#007AFF', fontWeight: '500' },
   modalEndButton: { backgroundColor: '#FFEBEB' },

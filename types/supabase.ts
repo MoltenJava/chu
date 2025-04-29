@@ -6,7 +6,7 @@ export type Restaurant = Tables['restaurants']['Row'];
 
 export interface SupabaseMenuItem extends MenuItem {
   // Add restaurant fields
-  restaurant?: Restaurant;
+  restaurant?: Restaurant | string;
   
   // Additional fields for menu items
   _id: string; // Same as id
@@ -31,6 +31,9 @@ export function convertToSupabaseMenuItem(
   menuItem: MenuItem,
   restaurant?: Restaurant
 ): SupabaseMenuItem {
+  // Add debug logging to help troubleshoot
+  console.log(`Converting menu item: ${menuItem.name}, Restaurant:`, restaurant);
+  
   return {
     ...menuItem,
     restaurant,

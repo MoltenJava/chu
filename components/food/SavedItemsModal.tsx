@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import {
   StyleSheet,
   View,
@@ -10,11 +10,15 @@ import {
   SafeAreaView,
   Linking,
   SectionList,
-  Alert
+  Alert,
+  Animated,
+  Easing,
+  Dimensions
 } from 'react-native';
-import { Ionicons, FontAwesome5, MaterialIcons } from '@expo/vector-icons';
+import { Ionicons, FontAwesome5, MaterialIcons, FontAwesome } from '@expo/vector-icons';
 import { SupabaseMenuItem } from '@/types/supabase';
 import { CoupleSession } from '@/types/couple';
+import RandomFoodSelector from './RandomFoodSelector';
 
 interface SavedItemsModalProps {
   visible: boolean;
@@ -42,6 +46,9 @@ const SavedItemsModal: React.FC<SavedItemsModalProps> = ({
   sessionMatchIds = new Set(),
   onOpenSettings,
 }) => {
+  // Add state for random food selector modal
+  const [randomSelectorVisible, setRandomSelectorVisible] = useState(false);
+
   const handleDeliveryPress = (foodName: string, serviceName: string, url?: string) => {
     if (url) {
       Alert.alert(
@@ -68,6 +75,15 @@ const SavedItemsModal: React.FC<SavedItemsModalProps> = ({
   const handleSettingsPress = () => {
     console.log('Settings button pressed - requesting open');
     onOpenSettings();
+  };
+
+  // Add handler for dice button
+  const handleRandomButtonPress = () => {
+    if (savedItems.length === 0) {
+      Alert.alert("No Saved Dishes", "Save some dishes first to use the random picker!");
+      return;
+    }
+    setRandomSelectorVisible(true);
   };
 
   const sections = useMemo(() => {
@@ -201,6 +217,10 @@ const SavedItemsModal: React.FC<SavedItemsModalProps> = ({
               {coupleSession?.id ? 'Saved & Matches' : 'Your Saved Dishes'}
             </Text>
             <View style={styles.headerButtonsContainer}>
+              {/* Dice button for random food selector */}
+              <TouchableOpacity onPress={handleRandomButtonPress} style={styles.headerButton}>
+                <Ionicons name="dice" size={24} color="#FF6F61" />
+              </TouchableOpacity>
               <TouchableOpacity onPress={handleSettingsPress} style={styles.headerButton}>
                 <Ionicons name="settings-outline" size={26} color="#555" />
               </TouchableOpacity>
@@ -230,6 +250,14 @@ const SavedItemsModal: React.FC<SavedItemsModalProps> = ({
               ItemSeparatorComponent={() => <View style={styles.separator} />}
             />
           )}
+
+          {/* Random Food Selector Modal */}
+          <RandomFoodSelector 
+            visible={randomSelectorVisible}
+            onClose={() => setRandomSelectorVisible(false)}
+            items={savedItems}
+            onSelectDelivery={handleDeliveryPress}
+          />
         </View>
       </SafeAreaView>
     </Modal>
@@ -241,6 +269,7 @@ const colorWhite = '#FFFFFF';
 const colorBlack = '#000000';
 const colorBorder = '#E0E0E0';
 const colorLightGray = '#f0f0f0';
+const colorTextSecondary = '#666';
 
 const styles = StyleSheet.create({
   modalContainer: {

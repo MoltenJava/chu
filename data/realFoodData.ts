@@ -1,7 +1,28 @@
 import { FoodItem } from '../types/food';
-import { fetchRestaurantMetadata, loadLocalMetadata } from '../utils/metadataService';
+import { fetchRestaurantMetadata, loadLocalMetadata, getBackupMetadata } from '../utils/metadataService';
 import { foodData } from './foodData'; // Import the mock data as fallback
 import { calculateBatchDistances } from '../utils/locationService';
+import { Platform } from 'react-native';
+import Constants from 'expo-constants';
+
+// Helper to detect if we're running in TestFlight
+const isTestFlight = () => {
+  if (Platform.OS !== 'ios') return false;
+  
+  try {
+    // Access Constants safely without direct property access
+    const manifest = Constants.manifest as any;
+    if (manifest && manifest.extra && manifest.extra.appStoreReceipt) {
+      const isTestFlightReceipt = manifest.extra.appStoreReceipt.includes('sandboxReceipt');
+      console.log('[ENV CHECK] Running in TestFlight:', isTestFlightReceipt);
+      return isTestFlightReceipt;
+    }
+  } catch (e) {
+    console.log('[ENV CHECK] Error detecting environment:', e);
+  }
+  
+  return false;
+};
 
 // Cache for the loaded food data
 let cachedFoodData: FoodItem[] | null = null;
@@ -31,14 +52,57 @@ const shuffleArray = <T>(array: T[]): T[] => {
  */
 export const loadRealFoodData = async (): Promise<FoodItem[]> => {
   try {
+    console.log('[REAL-FOOD] Starting to load real food data');
+    const isTestFlightBuild = isTestFlight();
+    console.log('[REAL-FOOD] Environment:', isTestFlightBuild ? 'TestFlight' : 'Development');
+    
     // Get the base food items from the metadata service
     let foodItems = await fetchRestaurantMetadata();
     
-    console.log(`Got ${foodItems.length} items from metadata, calculating distances progressively...`);
+    console.log(`[REAL-FOOD] Got ${foodItems.length} items from metadata, calculating distances progressively...`);
+    
+    // Check if we received any valid items
+    if (foodItems.length === 0) {
+      console.warn('[REAL-FOOD] No items returned from S3. Using backup data.');
+      
+      // In TestFlight, use more reliable backup data instead of mock data
+      if (isTestFlightBuild) {
+        console.log('[REAL-FOOD] Using backup restaurant data for TestFlight');
+        foodItems = getBackupMetadata();
+      } else {
+        // In development, use mock data to keep dev/prod experiences similar
+        foodItems = [...foodData];
+      }
+      
+      console.log(`[REAL-FOOD] Using ${foodItems.length} fallback food items instead`);
+    }
     
     // Store the full dataset in cache for later use by the waiter mode
     fullDatasetCache = [...foodItems];
-    console.log(`Stored full dataset with ${fullDatasetCache.length} items in cache for waiter mode`);
+    console.log(`[REAL-FOOD] Stored full dataset with ${fullDatasetCache.length} items in cache for waiter mode`);
+    
+    // Validate restaurant names
+    const restaurantCounts: Record<string, number> = {};
+    const unknownRestaurants = foodItems.filter(item => !item.restaurant || item.restaurant === 'unknown restaurant');
+    
+    if (unknownRestaurants.length > 0) {
+      console.warn(`[REAL-FOOD] Found ${unknownRestaurants.length} items with unknown restaurants`);
+    }
+    
+    // Log restaurant distribution
+    foodItems.forEach(item => {
+      if (item.restaurant) {
+        restaurantCounts[item.restaurant] = (restaurantCounts[item.restaurant] || 0) + 1;
+      }
+    });
+    
+    console.log('[REAL-FOOD] Restaurant distribution:', 
+      Object.entries(restaurantCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([name, count]) => `${name}: ${count}`)
+        .join(', ')
+    );
     
     // Ensure coordinates are present for every item (use default if missing)
     foodItems = foodItems.map(item => {
@@ -68,10 +132,16 @@ export const loadRealFoodData = async (): Promise<FoodItem[]> => {
     console.log(`Returning ${itemsWithDistance.length} items with progressive distance calculation (limited from ${foodItems.length})`);
     return itemsWithDistance;
   } catch (error) {
-    console.error('Error loading real food data:', error);
+    console.error('[REAL-FOOD] Error loading real food data:', error);
     
-    // Fallback to mock data
-    return [];
+    // Fallback to backup data in TestFlight, mock data otherwise
+    if (isTestFlight()) {
+      console.log('[REAL-FOOD] Using backup data for TestFlight after error');
+      return getBackupMetadata();
+    }
+    
+    // Use mock data in development
+    return foodData;
   }
 };
 

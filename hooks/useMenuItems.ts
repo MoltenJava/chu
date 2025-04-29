@@ -99,17 +99,21 @@ export function useMenuItems(useLocation: boolean = false) {
       setLoading(true);
       setError(null);
 
+      // Add debug logging for TestFlight
+      console.log('Starting Supabase query for menu items...');
+
+      // Fix the inconsistent relationship name
       let query = supabase
         .from('menu_items')
         .select(`
           *,
-          restaurant:restaurants(*)
+          restaurant:restaurant_id(*)
         `);
 
       // If in waiter mode, fetch restaurant-specific items
       if (currentRestaurant) {
         console.log('Fetching items for restaurant:', currentRestaurant);
-        query = query.eq('restaurants.name', currentRestaurant);
+        query = query.eq('restaurant_id.name', currentRestaurant);
       } else if (useLocation) {
         const location = await getLocation();
         if (location) {
@@ -122,10 +126,10 @@ export function useMenuItems(useLocation: boolean = false) {
           const lngDelta = 0.045 / Math.cos(lat * Math.PI / 180);
           
           query = query
-            .gte('restaurants.latitude', lat - latDelta)
-            .lte('restaurants.latitude', lat + latDelta)
-            .gte('restaurants.longitude', lng - lngDelta)
-            .lte('restaurants.longitude', lng + lngDelta);
+            .gte('restaurant_id.latitude', lat - latDelta)
+            .lte('restaurant_id.latitude', lat + latDelta)
+            .gte('restaurant_id.longitude', lng - lngDelta)
+            .lte('restaurant_id.longitude', lng + lngDelta);
         }
       }
 
@@ -141,7 +145,7 @@ export function useMenuItems(useLocation: boolean = false) {
 
       // Convert to SupabaseMenuItem format
       const convertedItems = menuItems.map(item => 
-        convertToSupabaseMenuItem(item, item.restaurant)
+        convertToSupabaseMenuItem(item, item.restaurant_id)
       );
 
       // Debug log the fetched items
