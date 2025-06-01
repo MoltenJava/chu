@@ -7,6 +7,7 @@ import { FoodItem } from '../../types/food';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/lib/supabase';
+import { useLocationContext } from '../../context/LocationContext';
 import { 
   createSession, 
   joinSession, 
@@ -121,6 +122,8 @@ const testSupabaseConnection = async () => {
 };
 
 export default function CoupleModeScreen() {
+  const { currentUserLocationForApp } = useLocationContext();
+
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [foodItems, setFoodItems] = useState<FoodItem[]>([]);
@@ -195,6 +198,12 @@ export default function CoupleModeScreen() {
   // Load the food data when the component mounts
   useEffect(() => {
     const loadData = async () => {
+      if (!currentUserLocationForApp) {
+        console.warn('[CoupleModeScreen] No user location available yet. Skipping data load.');
+        setError('Location not available. Please ensure location services are enabled and try again.');
+        setIsLoading(false);
+        return;
+      }
       try {
         setIsLoading(true);
         setError(null);
@@ -207,7 +216,8 @@ export default function CoupleModeScreen() {
         console.log(`[DEBUG] Couple mode screen using userID: ${id}`);
         
         // Use loadRealFoodData to get distance information
-        const data = await loadRealFoodData();
+        console.log('[CoupleModeScreen] Loading real food data with location:', currentUserLocationForApp);
+        const data = await loadRealFoodData(currentUserLocationForApp);
         
         if (data && data.length > 0) {
           console.log(`Loaded ${data.length} items for couple mode`);
@@ -230,8 +240,10 @@ export default function CoupleModeScreen() {
       }
     };
     
+    if (currentUserLocationForApp) {
     loadData();
-  }, []);
+    }
+  }, [currentUserLocationForApp]);
   
   // Handle exit from couple mode with thorough cleanup
   const handleExit = async () => {

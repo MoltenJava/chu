@@ -1,7 +1,6 @@
 import React from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
-import { CoupleSwipingScreen } from '../components/couple/CoupleSwipingScreen';
 import { useFoodItems } from '../hooks/useFoodItems';
 import { useSession } from '../hooks/useSession';
 
@@ -18,5 +17,4 @@ export default function CoupleSwipeRoute() {
     );
   }
 
-  return <CoupleSwipingScreen session={session} foodItems={foodItems} />;
 } 

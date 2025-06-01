@@ -9,10 +9,12 @@ import {
   Text,
   TouchableOpacity,
   View,
+  Button,
 } from "react-native";
 import { Ionicons, FontAwesome5, MaterialIcons } from "@expo/vector-icons";
 import { SupabaseMenuItem } from "@/types/supabase";
 import * as Haptics from 'expo-haptics';
+import * as Sentry from '@sentry/react-native';
 
 /** ===== constants ===== */
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
@@ -166,6 +168,20 @@ export default function RandomFoodSelector({
   const [isSpinning, setIsSpinning] = useState(false);
   const [spinComplete, setSpinComplete] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  
+  // Add debugging useEffect for restaurant data
+  useEffect(() => {
+    if (selected && spinComplete) {
+      console.log('[RANDOM-FOOD] Selected item:', 
+        { 
+          name: selected.menu_item, 
+          title: selected.title,
+          // log raw restaurant data for debugging
+          restaurant_raw: selected.restaurant
+        }
+      );
+    }
+  }, [selected, spinComplete]);
 
   /* ------------ helpers ------------ */
   // Center of the screen where the selected item should land
@@ -393,9 +409,7 @@ export default function RandomFoodSelector({
             <Animated.View style={[styles.detailBox, { opacity: detailFade }]}>
               <Text style={styles.foodTxt}>{selected.menu_item || selected.title}</Text>
               <Text style={styles.restTxt}>
-                {typeof selected.restaurant === 'object' 
-                  ? selected.restaurant?.name 
-                  : (selected.restaurant || selected.title)}
+                {selected.title || 'No Restaurant'}
               </Text>
             </Animated.View>
           )}
@@ -673,5 +687,5 @@ const styles = StyleSheet.create({
   },
   circle: {
     borderRadius: 50
-  }
+  },
 });

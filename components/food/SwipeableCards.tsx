@@ -27,7 +27,6 @@ import { SupabaseMenuItem } from '@/types/supabase';
 import { FoodCard } from './FoodCard';
 import FoodFilter from './FoodFilter';
 import WaiterButton from './WaiterButton';
-import { CoupleModeScreen } from '../couple/CoupleModeScreen';
 import { Animated as RNAnimated } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -52,12 +51,14 @@ import { endSession, recordSwipe as recordCoupleSwipe, getSessionMatchIds } from
 import * as CoupleContext from '../../context/CoupleContext';
 import { supabase } from '../../lib/supabase';
 import { RealtimeChannel } from '@supabase/supabase-js';
-import { CoupleMatch, CoupleSwipe } from '../../types/database';
+import { CoupleMatch, CoupleSwipe } from '../../types/couple';
+import { Restaurant, MenuItemFromView as MenuItem } from '../../types/supabase';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { createSession as createCoupleSession } from '../../utils/coupleModeService';
 import SessionCreatedModal from '../couple/SessionCreatedModal';
 import * as PlaylistService from '../../utils/playlistService';
-import SettingsModal from '../settings/SettingsModal';
+import { useSavedItems, SavedItemWithDetails } from '@/hooks/useSavedItems'; // <-- Import SavedItemWithDetails type
+import * as Sentry from '@sentry/react-native';
 
 // Define new color palette
 const colorBackground = '#FAFAFA'; // Off-white
@@ -93,13 +94,17 @@ interface SwipeableCardsProps {
   onDislike?: (food: SupabaseMenuItem) => void;
   onSwipeHistoryUpdate?: (history: SwipeHistoryItem[]) => void;
   onRequestRestaurantItems?: (restaurant: string) => Promise<SupabaseMenuItem[]>;
+  onRequestFilteredItems?: (filters: string[]) => Promise<SupabaseMenuItem[]>;
   onNavigateToPlaylist?: () => void;
+  selectedFilters: string[];
+  onFilterChange: (filters: string[]) => void;
 }
 
-interface FoodFilterProps {
-  onFilterChange: (filters: string[]) => void;
-  initialSelectedFilters: string[];
-  categories?: string[];
+// Define filter type
+interface FilterOption {
+  id: string;
+  label: string;
+  emoji: string;
 }
 
 const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
@@ -108,29 +113,50 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   onDislike,
   onSwipeHistoryUpdate,
   onRequestRestaurantItems,
-  onNavigateToPlaylist
+  onRequestFilteredItems,
+  onNavigateToPlaylist,
+  selectedFilters,
+  onFilterChange,
 }) => {
   // State Management Integration
-  const { coupleSession: parteeSession, setCoupleSession: setParteeSession, user } = CoupleContext.useCoupleContext();
+  const { 
+    coupleSession: parteeSession, 
+    setCoupleSession: setParteeSession, 
+    user, 
+    // logout // <-- Assuming logout is NOT in CoupleContext based on error
+  } = CoupleContext.useCoupleContext(); 
+  
+  // Assume logout comes from a different hook/context
+  // const { logout } = useAuth(); // Example: uncomment and adjust if needed
+  const logout = async () => { console.warn("Logout function not implemented yet!"); }; // Placeholder
+  
+  const { 
+    savedItems, 
+    addSavedItem, 
+    removeSavedItem,
+    loading: savedItemsLoading,
+    error: savedItemsError,
+    refreshSavedItems,
+    clearAllSavedItems // <-- Get the new function from the hook
+  } = useSavedItems();
 
   // State
   const [currentIndex, setCurrentIndex] = useState(0);
   const [activeData, setActiveData] = useState<SupabaseMenuItem[]>(data);
   const [swipeHistory, setSwipeHistory] = useState<SwipeHistoryItem[]>([]);
-  const [savedItems, setSavedItems] = useState<SupabaseMenuItem[]>([]);
   const [savedItemsVisible, setSavedItemsVisible] = useState(false);
   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
   const [isOptionsModalVisible, setIsOptionsModalVisible] = useState(false);
   const [currentRange, setCurrentRange] = useState<number>(10);
-  const [selectedFilters, setSelectedFilters] = useState<string[]>([]);
   const [isFilterSelectorVisible, setIsFilterSelectorVisible] = useState(false);
   const [filterModalVisible, setFilterModalVisible] = useState(false);
-  const [isFilterChanging, setIsFilterChanging] = useState(false);
+  // const [isFilterChanging, setIsFilterChanging] = useState(false); // Replaced with isLoadingFilteredData
   const [isMapExpanded, setIsMapExpanded] = useState(false);
   const [cameraSelectionModalVisible, setCameraSelectionModalVisible] = useState(false);
   const [selectedItemForCamera, setSelectedItemForCamera] = useState<SupabaseMenuItem | null>(null);
   const [favoriteItems, setFavoriteItems] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<'all' | 'favorites' | 'couple'>('all');
+  // Revert to local waiter mode state like the old version
   const [waiterModeActive, setWaiterModeActive] = useState<boolean>(false);
   const [currentRestaurant, setCurrentRestaurant] = useState<string | null>(null);
   const [showParteeMode, setShowParteeMode] = useState(false);
@@ -157,15 +183,13 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   // Add state for expanded card
   const [expandingCardId, setExpandingCardId] = useState<string | null>(null);
 
-  // Refs
+  // Refs (simplified)
   const isMountedRef = useRef(true);
   const timeoutsRef = useRef<NodeJS.Timeout[]>([]);
-  const initialRenderRef = useRef(true);
-  const isExitingWaiterModeRef = useRef<boolean>(false);
-  const filteredDataRef = useRef(data);
   const currentIndexRef = useRef(currentIndex);
   const preWaiterModeDataRef = useRef<SupabaseMenuItem[]>([]);
   const preWaiterModeIndexRef = useRef<number>(0);
+  const preWaiterModeFiltersRef = useRef<string[]>([]);
   const fullDatasetRef = useRef<SupabaseMenuItem[]>(data);
   const swipeThrottleRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -302,23 +326,137 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
   // --- RE-ADD state for Session Match IDs --- 
   const [sessionMatchIds, setSessionMatchIds] = useState<Set<string>>(new Set());
 
-  // Update refs when state changes
-  useEffect(() => {
-    filteredDataRef.current = data;
-  }, [data]);
+  // Animated style for the filter row container
+  const filterRowAnimatedStyle = useAnimatedStyle(() => {
+    return {
+      height: filterRowHeight.value,
+      opacity: interpolate(filterRowHeight.value, [0, 25, 50], [0, 0.5, 1]), // Adjusted interpolation range
+      overflow: 'hidden', // Clip content when height is 0
+    };
+  });
 
+  // ADD Optimistic count state
+  const [optimisticSavedCount, setOptimisticSavedCount] = useState(0);
+  
+  // Initialize optimistic count based on initial fetched data
+  useEffect(() => {
+      // Only set initial count if savedItems has loaded and optimistic count hasn't been set yet
+      if (!savedItemsLoading && savedItems && optimisticSavedCount === 0) {
+          setOptimisticSavedCount(savedItems.length);
+      }
+      // If savedItems changes later (e.g., after refresh), update optimistic count
+      // This handles cases where background saves/deletes eventually update the hook state
+      else if (!savedItemsLoading && savedItems && savedItems.length !== optimisticSavedCount) {
+           // Debounce or be careful here to avoid loops if updates are frequent
+           // For simplicity now, just update if different
+           setOptimisticSavedCount(savedItems.length);
+      }
+  }, [savedItems, savedItemsLoading]); // Rerun when savedItems or loading state changes
+
+  // Add ref to track recent waiter mode exits
+  const justExitedWaiterModeRef = useRef(false);
+
+  // Update refs when state changes (simplified)
   useEffect(() => {
     currentIndexRef.current = currentIndex;
   }, [currentIndex]);
 
+  // Update fullDatasetRef when data changes
+  useEffect(() => {
+    if (data) {
+      fullDatasetRef.current = data;
+    }
+  }, [data]);
+
+  // State for storing filtered data from database
+  const [filteredData, setFilteredData] = useState<SupabaseMenuItem[]>(data);
+  const [isLoadingFilteredData, setIsLoadingFilteredData] = useState(false);
+
+  // Effect to fetch filtered data from database when filters change
+  useEffect(() => {
+    const fetchFilteredData = async () => {
+      if (selectedFilters.length === 0) {
+        console.log('[FILTER_DEBUG] No filters selected, using original data');
+        setFilteredData(data);
+        return;
+      }
+
+      if (!onRequestFilteredItems) {
+        console.log('[FILTER_DEBUG] onRequestFilteredItems not provided, falling back to local filtering');
+        // Fallback to local filtering if database fetching not available
+        const localFiltered = data.filter(item => 
+          selectedFilters.some(filter => {
+            if (item.dish_types && item.dish_types.includes(filter)) return true;
+            if (item.food_type && item.food_type.toLowerCase().includes(filter.toLowerCase())) return true;
+            if (item.cuisines && item.cuisines.includes(filter)) return true;
+            return false;
+          })
+        );
+        setFilteredData(localFiltered);
+        return;
+      }
+
+      console.log(`[FILTER_DEBUG] Fetching ALL items from database for filters: ${selectedFilters.join(', ')}`);
+      setIsLoadingFilteredData(true);
+      
+      try {
+        const allFilteredItems = await onRequestFilteredItems(selectedFilters);
+        console.log(`[FILTER_DEBUG] Fetched ${allFilteredItems.length} items from database`);
+        
+        if (allFilteredItems.length > 0) {
+          console.log(`[FILTER_DEBUG] First few database filtered items:`, 
+            allFilteredItems.slice(0, 3).map(item => `${item.name} from ${item.title}`));
+        }
+        
+        setFilteredData(allFilteredItems);
+      } catch (error) {
+        console.error('[FILTER_DEBUG] Error fetching filtered items from database:', error);
+        // Fallback to local filtering on error
+        const localFiltered = data.filter(item => 
+          selectedFilters.some(filter => {
+            if (item.dish_types && item.dish_types.includes(filter)) return true;
+            if (item.food_type && item.food_type.toLowerCase().includes(filter.toLowerCase())) return true;
+            if (item.cuisines && item.cuisines.includes(filter)) return true;
+            return false;
+          })
+        );
+        setFilteredData(localFiltered);
+      } finally {
+        setIsLoadingFilteredData(false);
+      }
+    };
+
+    fetchFilteredData();
+  }, [selectedFilters, data, onRequestFilteredItems]);
+
+  // Update activeData when filteredData changes
+  useEffect(() => {
+    // Skip if waiter mode is active - let waiter logic handle activeData
+    if (waiterModeActive) return;
+    
+    // Skip reset if we just exited waiter mode
+    if (justExitedWaiterModeRef.current) {
+      console.log(`[SW_CARDS_FILTER_EFFECT] Just exited waiter mode - skipping reset to preserve index`);
+      justExitedWaiterModeRef.current = false; // Reset the flag
+      return;
+    }
+    
+    console.log(`[SW_CARDS_FILTER_EFFECT] Updating activeData with ${filteredData.length} filtered items`);
+    if (filteredData.length > 0) {
+      console.log(`[SW_CARDS_FILTER_EFFECT] First few filtered items:`, filteredData.slice(0, 3).map(item => `${item.name} from ${item.title}`));
+    }
+    setActiveData(filteredData);
+    setCurrentIndex(0); // Reset to start when filters change
+  }, [filteredData, waiterModeActive]);
+
   // Prefetch upcoming images
   useEffect(() => {
     const prefetchUpcomingImages = async () => {
-      if (!data || data.length === 0) return;
+      if (!activeData || activeData.length === 0) return;
 
       const startIndex = currentIndex;
-      const endIndex = Math.min(startIndex + PREFETCH_AHEAD, data.length);
-      const imagesToPrefetch = data
+      const endIndex = Math.min(startIndex + PREFETCH_AHEAD, activeData.length);
+      const imagesToPrefetch = activeData
         .slice(startIndex, endIndex)
         .map(item => item.s3_url)
         .filter(url => url && typeof url === 'string');
@@ -335,47 +473,90 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     };
 
     prefetchUpcomingImages();
-  }, [currentIndex, data]);
+  }, [currentIndex, activeData]);
 
-  // Ensure fullDatasetRef is updated when the main data prop changes
+  // Simple waiter mode effect - just track party mode state
   useEffect(() => {
-     if (data && data.length > 0) {
-         fullDatasetRef.current = data;
-         // Keep preWaiterModeDataRef for restoration
-         if (!waiterModeActive && (!activeData || activeData.length === 0)) {
-            setActiveData(data);
-            // Initialize preWaiterModeDataRef here too? Maybe not necessary.
-         }
-     }
-  }, [data]);
+    setPartyModeActive(!!parteeSession);
+  }, [parteeSession]);
 
-  // Handle waiter button press - Hybrid Exit Logic
-  const handleWaiterButtonPress = useCallback((restaurantOrActive: boolean | string) => {
+  // --- SIMPLIFIED handleWaiterButtonPress without excessive throttling and loading --- 
+  const handleWaiterButtonPress = useCallback(async (restaurantOrActive: boolean | string) => {
     if (!isMountedRef.current) return;
 
     // --- Entering Waiter Mode --- 
     if (restaurantOrActive === true || typeof restaurantOrActive === 'string') {
-        // Store previous state accurately
+        // Store previous state accurately INCLUDING filters
         preWaiterModeIndexRef.current = currentIndex;
         preWaiterModeDataRef.current = [...activeData]; 
+        preWaiterModeFiltersRef.current = [...selectedFilters]; // Store current filters
+        
+        console.log(`[WAITER-DEBUG] Storing filters state: ${selectedFilters.join(', ')}`);
         
         let restaurant: string;
         let itemsToDisplay: SupabaseMenuItem[] = [];
 
         if (typeof restaurantOrActive === 'string') { 
             restaurant = restaurantOrActive;
-            itemsToDisplay = fullDatasetRef.current.filter(item => item.title === restaurant);
+            // Fetch ALL items from this restaurant from the database
+            if (onRequestRestaurantItems) {
+              console.log(`[WAITER-DEBUG] Fetching ALL items for restaurant: ${restaurant}`);
+              try {
+                itemsToDisplay = await onRequestRestaurantItems(restaurant);
+                console.log(`[WAITER-DEBUG] Fetched ${itemsToDisplay.length} items from database for ${restaurant}`);
+              } catch (error) {
+                console.error(`[WAITER-DEBUG] Error fetching restaurant items:`, error);
+                Alert.alert("Error", "Could not load restaurant items. Please try again.");
+                return;
+              }
+            } else {
+              // Fallback to current batch filtering if onRequestRestaurantItems not available
+              itemsToDisplay = fullDatasetRef.current.filter(item => item.title === restaurant);
+              console.log(`[WAITER-DEBUG] Fallback: Filtered ${itemsToDisplay.length} items from current batch`);
+            }
         } else { 
             if (currentIndex < activeData.length) {
                 const triggerCard = activeData[currentIndex];
                 if (!triggerCard) return; 
                 restaurant = triggerCard.title;
-                itemsToDisplay = fullDatasetRef.current.filter(item => item.title === restaurant);
-                const triggerCardId = triggerCard._id || triggerCard.id;
-                const currentItemIndex = itemsToDisplay.findIndex(item => (item._id || item.id) === triggerCardId);
-                if (currentItemIndex > 0) { 
-                    const [itemToMove] = itemsToDisplay.splice(currentItemIndex, 1);
-                    itemsToDisplay.unshift(itemToMove);
+                console.log(`[WAITER-DEBUG] Trigger card restaurant: ${restaurant}`);
+                
+                // Fetch ALL items from this restaurant from the database
+                if (onRequestRestaurantItems) {
+                  console.log(`[WAITER-DEBUG] Fetching ALL items for restaurant: ${restaurant}`);
+                  try {
+                    itemsToDisplay = await onRequestRestaurantItems(restaurant);
+                    console.log(`[WAITER-DEBUG] Fetched ${itemsToDisplay.length} items from database for ${restaurant}`);
+                    
+                    // Move the trigger card to the front if it exists in the fetched items
+                    const triggerCardId = triggerCard._id || triggerCard.id;
+                    const currentItemIndex = itemsToDisplay.findIndex(item => (item._id || item.id) === triggerCardId);
+                    if (currentItemIndex > 0) { 
+                        const [itemToMove] = itemsToDisplay.splice(currentItemIndex, 1);
+                        itemsToDisplay.unshift(itemToMove);
+                        console.log(`[WAITER-DEBUG] Moved trigger card from index ${currentItemIndex} to front`);
+                    } else if (currentItemIndex === -1) {
+                        // If trigger card not found in fetched items, add it to the front
+                        itemsToDisplay.unshift(triggerCard);
+                        console.log(`[WAITER-DEBUG] Added trigger card to front (not found in fetched items)`);
+                    }
+                  } catch (error) {
+                    console.error(`[WAITER-DEBUG] Error fetching restaurant items:`, error);
+                    Alert.alert("Error", "Could not load restaurant items. Please try again.");
+                    return;
+                  }
+                } else {
+                  // Fallback to current batch filtering if onRequestRestaurantItems not available
+                  console.log(`[WAITER-DEBUG] Full dataset length: ${fullDatasetRef.current.length}`);
+                  itemsToDisplay = fullDatasetRef.current.filter(item => item.title === restaurant);
+                  console.log(`[WAITER-DEBUG] Fallback: Filtered items for ${restaurant}: ${itemsToDisplay.length} items`);
+                  const triggerCardId = triggerCard._id || triggerCard.id;
+                  const currentItemIndex = itemsToDisplay.findIndex(item => (item._id || item.id) === triggerCardId);
+                  if (currentItemIndex > 0) { 
+                      const [itemToMove] = itemsToDisplay.splice(currentItemIndex, 1);
+                      itemsToDisplay.unshift(itemToMove);
+                      console.log(`[WAITER-DEBUG] Moved trigger card from index ${currentItemIndex} to front`);
+                  }
                 }
             } else {
                 Alert.alert("Waiter Mode", "Cannot activate Waiter Mode at the end of the list.");
@@ -385,6 +566,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         
         if (itemsToDisplay.length > 1) {
             console.log(`[WAITER-DEBUG] Entering waiter mode for: ${restaurant}. Storing index: ${preWaiterModeIndexRef.current}`);
+            console.log(`[WAITER-DEBUG] Setting activeData to ${itemsToDisplay.length} restaurant items`);
             setWaiterModeActive(true);
             setCurrentRestaurant(restaurant);
             setActiveData(itemsToDisplay);
@@ -399,52 +581,46 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     } 
     // --- Exiting Waiter Mode --- 
     else {
-      console.log("[WAITER-DEBUG] Exiting waiter mode. Replacing trigger card with current card.");
+      console.log("[WAITER-DEBUG] Exiting waiter mode. Restoring to original position and continuing with normal flow.");
+      
+      // Turn off waiter mode first
+      setWaiterModeActive(false);
+      setCurrentRestaurant(null);
+      
+      // Set flag to prevent filter effect from resetting index
+      justExitedWaiterModeRef.current = true;
       
       // Ensure we have a valid state to restore from and a current card
       if (preWaiterModeDataRef.current && preWaiterModeDataRef.current.length > 0 && currentIndex < activeData.length) {
           
           const currentWaiterCard = activeData[currentIndex];
-          const originalIndex = preWaiterModeIndexRef.current;
           const originalData = preWaiterModeDataRef.current;
+          const originalIndex = preWaiterModeIndexRef.current;
+          const originalFilters = preWaiterModeFiltersRef.current;
 
-          console.log(`[WAITER-DEBUG] Current waiter card ID: ${currentWaiterCard._id || currentWaiterCard.id}, Original Index: ${originalIndex}`);
-
-          // Create the hybrid deck
-          let hybridData = [...originalData]; 
-
-          // Check if originalIndex is valid before replacing
-          if (originalIndex >= 0 && originalIndex < hybridData.length) {
-              console.log(`[WAITER-DEBUG] Replacing card at index ${originalIndex} with current waiter card.`);
-              hybridData[originalIndex] = currentWaiterCard; // Replace element at the original index
-          } else {
-              console.warn(`[WAITER-DEBUG] Invalid originalIndex (${originalIndex}) for replacement. Cannot place current card correctly.`);
-              // Fallback: Restore original data and index? Or try to insert?
-              // Let's try restoring original and advancing past it as a safer fallback.
-              hybridData = originalData; // Use original data
-              setCurrentIndex(Math.min(originalIndex + 1, hybridData.length - 1)); // Advance past original
-              setActiveData(hybridData);
-              setWaiterModeActive(false);
-              setCurrentRestaurant(null);
-              return; // Exit early for fallback
+          console.log(`[WAITER-DEBUG] Current waiter card ID: ${currentWaiterCard._id || currentWaiterCard.id}`);
+          console.log(`[WAITER-DEBUG] Restoring to original index: ${originalIndex}`);
+          console.log(`[WAITER-DEBUG] Restoring original filters: [${originalFilters.join(', ')}]`);
+          
+          // Restore the original filter state first if we had filters
+          if (originalFilters.length > 0) {
+            onFilterChange(originalFilters);
           }
 
-          // Set state with the hybrid deck, pointing to the current (waiter) card
-          setActiveData(hybridData);
-          setCurrentIndex(originalIndex); 
-          console.log(`[WAITER-DEBUG] Set hybrid data, current index set to ${originalIndex}`);
+          // Reconstruct the full hybrid data based on original position
+          const upcomingCards = originalData.slice(originalIndex + 1);
+          const hybridData = [
+              ...originalData.slice(0, originalIndex), // previously swiped cards
+              currentWaiterCard, // current waiter card at original position
+              ...upcomingCards // continue with original flow
+          ];
 
-      } else {
-          // Fallback if refs/state are invalid
-          console.warn("[WAITER-DEBUG] Pre-waiter state refs or current waiter index invalid. Falling back to full data reset.");
-          setActiveData(fullDatasetRef.current); 
-          setCurrentIndex(0); 
+          console.log(`[WAITER-DEBUG] Set hybrid data with ${hybridData.length} items, restoring to index: ${originalIndex}`);
+          setActiveData(hybridData);
+          setCurrentIndex(originalIndex); // restore original index
       }
-      
-      setWaiterModeActive(false);
-      setCurrentRestaurant(null);
     }
-  }, [activeData, currentIndex]);
+  }, [activeData, currentIndex, onRequestRestaurantItems, selectedFilters, onFilterChange]);
 
   // Add handlers for couple mode
   const handleParteeModePress = useCallback(() => {
@@ -456,79 +632,97 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     setShowParteeMode(false);
   }, []);
 
-  // Handle swipe action
+  // --- Helper Functions ---
+  const isMounted = () => isMountedRef.current;
+
+  // --- Swipe Handling Logic --- 
+  // Change direction parameter type to SwipeDirection
   const handleSwipe = useCallback(async (item: SupabaseMenuItem, direction: SwipeDirection) => {
-    if (!isMountedRef.current || !user) return; // Ensure user exists too
-    
-    const isParteeMode = !!parteeSession;
-    const decision = direction === 'right';
-    // Determine the correct food item ID (use 'id' if '_id' doesn't exist)
-    const foodItemId = item.id || item._id;
-    
-    if (!foodItemId) {
-        console.error("Error in handleSwipe: food item ID is missing", item);
-        Alert.alert('Error', 'Could not process swipe: missing item ID.');
-        // Still advance card maybe?
-        setCurrentIndex(prev => prev + 1);
+    // Ignore swipes that aren't left or right
+    if (direction !== 'left' && direction !== 'right') {
+        console.log(`[SwipeableCards] Ignoring swipe direction: ${direction}`);
         return;
     }
 
-    // --- Try recording swipe FIRST if in partee mode --- 
-    if (isParteeMode) {
-        try {
-            console.log(`[ParteeMode] Recording swipe: S_ID=${parteeSession.id}, U_ID=${user.id}, F_ID=${foodItemId}, Decision=${decision}`);
-            await recordCoupleSwipe(parteeSession.id, user.id, foodItemId, decision);
-            // Swipe recorded successfully for partee mode
-        } catch (error) {
-            console.error('Error recording partee swipe:', error);
-            Alert.alert('Swipe Error', 'Could not record your swipe for the partee. Please try again.');
-            // Decide if we should block card progression on error
-            // For now, let's allow progression
-        }
+    if (!isMounted()) return;
+    console.log(`[SwipeableCards] handleSwipe called. Item ID: ${item.id}, Direction: ${direction}`);
+
+    const foodItemId = item.id || item._id; // Ensure we have the correct ID
+    if (!foodItemId) {
+        console.error("[SwipeableCards] Swiped item has no ID.");
+        setCurrentIndex(prev => prev + 1); // Still advance card to prevent getting stuck
+        return; 
     }
 
-    // --- Single User Logic / Local State Updates --- 
-    try {
-      if (decision) { // Right swipe
-        onLike?.(item);
-        setSavedItems(prev => [...prev, item]);
-        
-        // Save to default playlist in the background (keep this)
-        if (user) {
-            PlaylistService.saveItemToDefaultPlaylist(user.id, foodItemId)
-             .catch((err: Error) => console.error("Error saving item to default playlist:", err)); // Log error if background save fails
-        }
+    // Now direction is guaranteed to be 'left' or 'right'
+    const decision = direction === 'right';
 
-        // --- Trigger saved badge animation ONLY IF NOT in partee mode --- 
-        if (!parteeSession) {
+    // --- Trigger immediate UI updates first --- 
+    if (decision) {
+        // Trigger badge animation immediately
+        if (!parteeSession) { 
           savedBadgeScale.value = withSequence(
             withSpring(1.2),
             withSpring(1)
           );
         }
-      } else { // Left swipe
-        onDislike?.(item);
-      }
-      
-      const historyItem: SwipeHistoryItem = {
-        foodItem: item,
-        direction: direction as 'left' | 'right',
-        timestamp: Date.now()
-      };
-      
-      setSwipeHistory(prev => {
-        const newHistory = [...prev, historyItem];
-        onSwipeHistoryUpdate?.(newHistory);
-        return newHistory;
-      });
-      
-      // --- Advance Card Index --- 
-      setCurrentIndex(prev => prev + 1);
-
-    } catch (error) {
-      console.error('Error in handleSwipe (local updates/saving):', error);
-      setCurrentIndex(prev => prev + 1);
+        // Increment optimistic count immediately
+        setOptimisticSavedCount(prev => prev + 1);
     }
+    
+    // --- Advance card immediately --- 
+    console.log(`[SwipeableCards] Advancing card index from ${currentIndexRef.current}`);
+    setCurrentIndex(prev => prev + 1);
+    
+    // --- Perform Async Operations in Background --- 
+    // Couple Mode Swipe (already async, assume it doesn't block UI significantly)
+    if (parteeSession && user) {
+      console.log(`[SwipeableCards] Partee Mode: Recording swipe for user ${user.id}`);
+      recordCoupleSwipe(parteeSession.id, user.id, foodItemId, decision)
+        .then(() => console.log(`[SwipeableCards] Partee Mode: Swipe recorded successfully.`))
+        .catch(error => {
+            console.error('[SwipeableCards] Error recording partee swipe:', error);
+            Sentry.captureException(error, { extra: { foodItemId, userId: user.id, sessionId: parteeSession.id, message: 'Error recording couple swipe' } });
+            // Non-blocking alert or logging
+            // Alert.alert('Swipe Error', 'Could not record your swipe for the partee. Please try again.');
+        });
+    }
+    
+    // Single User Like/Dislike Callbacks (if provided)
+    if (decision) {
+      onLike?.(item);
+    } else {
+      onDislike?.(item);
+    }
+
+    // Save item in background (no await)
+    if (decision && user) {
+      console.log(`[SwipeableCards] Calling addSavedItem in background for item: ${foodItemId}`);
+      addSavedItem(foodItemId)
+        .then(() => {
+            console.log(`[SwipeableCards] Background addSavedItem call completed.`);
+        })
+        .catch(saveError => {
+            console.error("[SwipeableCards] Background error calling addSavedItem:", saveError);
+            Sentry.captureException(saveError, { extra: { foodItemId, userId: user.id, message: 'Error adding saved item in background' } });
+            // TODO: Implement background error handling (e.g., retry, user notification)
+            // Revert optimistic count on failure?
+            // setOptimisticSavedCount(prev => prev - 1); // Careful with race conditions here
+        });
+    }
+
+    // Update swipe history (local state, synchronous)
+    const historyItem: SwipeHistoryItem = {
+      foodItem: item,
+      direction: direction as 'left' | 'right',
+      timestamp: Date.now()
+    };
+    setSwipeHistory(prev => {
+      const newHistory = [...prev, historyItem];
+      onSwipeHistoryUpdate?.(newHistory);
+      return newHistory;
+    });
+
   }, [
       parteeSession, 
       user,
@@ -536,7 +730,8 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       onDislike, 
       onSwipeHistoryUpdate, 
       savedBadgeScale, 
-      recordCoupleSwipe
+      addSavedItem, // Keep dependency
+      // optimisticSavedCount is NOT needed as dependency, setState handles updates
   ]);
 
   // Cleanup on unmount
@@ -598,54 +793,30 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     }
   }, [filterModalVisible, filterModalAnim]);
 
-  // Handle filter changes
-  const handleFilterChange = useCallback((filters: string[]) => {
-    try {
-      if (!isMountedRef.current) return;
-      
-      // If filters include 'all', treat it as no filters selected
-      const actualFilters = filters.includes('All') ? [] : filters.map(f => f.toLowerCase());
-      
-      // Use functional updates to ensure we have latest state
-      setSelectedFilters(actualFilters);
-      
-      // Close the modal after applying filters, with small delay to prevent UI blocking
-      const timeoutId = setTimeout(() => {
-        try {
-          if (isMountedRef.current) {
-            setFilterModalVisible(false);
-          }
-        } catch (error) {
-          console.error("Error closing filter modal:", error);
-        }
-      }, 50);
-      
-      // Store the timeout for cleanup
-      timeoutsRef.current.push(timeoutId);
-    } catch (error) {
-      console.error("Error handling filter change:", error);
-      // Fall back to showing all items
-      if (isMountedRef.current) {
-        setSelectedFilters([]);
-        setFilterModalVisible(false);
-      }
-    }
-  }, []); // Empty dependency array since we use functional updates
-
-  // Filter the data based on selected filters
-  const filteredByCategories = useMemo(() => {
-    if (selectedFilters.length === 0) return data;
-    return data.filter(item => 
-      selectedFilters.some(filter => 
-        item.food_type === filter || item.cuisine === filter
-      )
-    );
-  }, [data, selectedFilters]);
-
-  // Toggle saved items modal visibility
+  // Toggle saved items modal visibility - Open immediately, refresh in background
   const toggleSavedItems = useCallback(() => {
+    const opening = !savedItemsVisible;
+    
+    // Toggle visibility immediately
     setSavedItemsVisible(prev => !prev);
-  }, []);
+
+    if (opening) {
+      console.log("[SwipeableCards] Opening SavedItemsModal, triggering background refresh...");
+      // Trigger refresh in the background (no await)
+      refreshSavedItems()
+        .then(() => {
+            console.log("[SwipeableCards] Background refreshSavedItems complete.");
+        })
+        .catch(refreshError => {
+            console.error("[SwipeableCards] Background error refreshing saved items:", refreshError);
+            Sentry.captureException(refreshError, { extra: { message: 'Error refreshing saved items in background' } });
+            // Show an alert, but modal is already open
+            Alert.alert("Update Failed", "Could not update saved items.");
+        });
+    }
+    // No else needed, closing just toggles visibility
+
+  }, [savedItemsVisible, refreshSavedItems]); // Dependencies remain the same
 
   // Toggle favorite status for a food item
   const toggleFavorite = useCallback((foodId: string) => {
@@ -659,6 +830,16 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       return newFavorites;
     });
   }, []);
+
+  // --- Add Handler for Header Filter Button ---
+  const handleHeaderFilterPress = useCallback(() => {
+    if (waiterModeActive) {
+      // Don't respond to taps when waiter mode is active
+      return;
+    }
+    setIsFilterSelectorVisible(prev => !prev);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, [waiterModeActive]); // Add waiterModeActive dependency
 
   // Handle delivery service press
   const handleDeliveryPress = useCallback((foodName: string, serviceName: string, url?: string) => {
@@ -691,26 +872,8 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     return selectedFilters.includes(id);
   };
 
-  const handleFilterSelect = (id: string) => {
-    // New logic: Handle 'all' separately
-    if (id === 'all') {
-      setSelectedFilters([]); // Clear filter
-    } else {
-      setSelectedFilters([id]); // Set specific filter
-    }
-    setIsFilterSelectorVisible(false); // Always hide selector after a tap in the row
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  // Header button press logic - Now only toggles visibility
-  const handleHeaderFilterPress = () => {
-    // New logic: Header button tap always toggles filter row
-    setIsFilterSelectorVisible(prev => !prev);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  // RE-ADD filter data (can be moved or fetched later)
-  const subcategoryFilters = [
+  // --- Restore subcategoryFilters definition --- 
+  const subcategoryFilters: FilterOption[] = [
       { id: 'all', label: 'All', emoji: '🍽️' },
       { id: 'burgers', label: 'Burgers', emoji: '🍔' },
       { id: 'pizza', label: 'Pizza', emoji: '🍕' },
@@ -729,18 +892,34 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       { id: 'indian', label: 'Indian', emoji: '🍛' }
   ];
 
-  // --- Render Header (Remove Logout Button & Dependency) --- 
-  const renderHeader = useCallback(() => {
-    const currentFilterEmoji = useMemo(() => {
-      if (selectedFilters.length === 0) {
-        return '🍽️'; // Default 'All' emoji
-      }
-      const selectedId = selectedFilters[0];
-      const filter = subcategoryFilters.find(f => f.id === selectedId);
-      return filter ? filter.emoji : '🍽️'; // Fallback to default
-    }, [selectedFilters, subcategoryFilters]);
+  // Update currentFilterEmoji to use the prop and typed param
+  const currentFilterEmoji = useMemo(() => {
+    if (selectedFilters.length === 0) {
+      return '🍽️';
+    }
+    const selectedId = selectedFilters[0];
+    // Add type to parameter f
+    const filter = subcategoryFilters.find((f: FilterOption) => f.id === selectedId);
+    return filter ? filter.emoji : '🍽️';
+  }, [selectedFilters, subcategoryFilters]); // Keep subcategoryFilters dependency
 
-    const savedCount = savedItems.length;
+  // --- Helper Functions ---
+  const handleFilterSelect = (id: string) => {
+    if (id === 'all') {
+      onFilterChange([]); 
+    } else {
+      onFilterChange([id]);
+    }
+    setIsFilterSelectorVisible(false); 
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  // --- Render Header --- 
+  const renderHeader = useCallback(() => {
+    // No need to calculate currentFilterEmoji here anymore
+
+    // Use optimistic count for the badge
+    const savedCount = optimisticSavedCount;
 
     return (
       <View style={styles.headerContainer}>
@@ -773,9 +952,24 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         </View>
         
         <View style={styles.headerRightContainer}>
-          {/* Party Button */}
+          {/* Filter Button - Apply consistent styling */} 
+          <TouchableOpacity 
+            style={styles.filterButtonContainer} 
+            onPress={handleHeaderFilterPress}
+            activeOpacity={waiterModeActive ? 1 : 0.7}
+            disabled={waiterModeActive}
+          >
+            {/* Inner view for background/border styling if needed */}
+            <View style={[styles.filterButtonInner, waiterModeActive && styles.filterButtonHeaderDisabled]}> 
+              <Text style={[styles.headerFilterEmoji, waiterModeActive && styles.filterEmojiDisabled]}>
+                {currentFilterEmoji}
+              </Text>
+            </View>
+          </TouchableOpacity>
+
+          {/* Party Button - Add marginLeft */} 
           <TouchableOpacity
-            style={styles.partyButton}
+            style={[styles.partyButton, { marginLeft: 8 }]} // Add marginLeft
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               
@@ -795,29 +989,25 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
             </View>
           </TouchableOpacity>
         
-          <WaiterButton
-            onPress={handleWaiterButtonPress}
-            isActive={waiterModeActive}
-          />
+          {/* Waiter Button - Add marginLeft via a wrapper or style prop */}
+          <View style={{ marginLeft: 8 }}> 
+            <WaiterButton
+              onPress={handleWaiterButtonPress}
+              isActive={waiterModeActive}
+            />
+          </View>
 
-          <TouchableOpacity 
-            style={styles.headerFilterButton} 
-            onPress={handleHeaderFilterPress}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.headerFilterEmoji}>{currentFilterEmoji}</Text>
-          </TouchableOpacity>
-
-          {/* Saved Items Button */}
+          {/* Saved Items Button - Keep marginLeft */} 
           <TouchableOpacity
-            style={styles.menuButton} 
+            style={styles.menuButton} // Already has marginLeft: 8
             onPress={toggleSavedItems} 
             activeOpacity={0.6}
           >
             <View style={styles.menuButtonInner}>
               <View style={styles.menuButtonContainer}>
                 <Ionicons name="heart-outline" size={22} color={colorTextPrimary} />
-                {savedCount > 0 && (
+                {/* Use optimisticSavedCount here */}
+                {savedCount > 0 && ( 
                   <Animated.View style={[styles.badgeContainer, savedBadgeScaleStyle]}>
                     <Text style={styles.badgeText}>{savedCount}</Text>
                   </Animated.View>
@@ -829,17 +1019,18 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       </View>
     );
   }, [
-    parteeSession,
-    waiterModeActive,
-    handleWaiterButtonPress,
-    handleHeaderFilterPress,
-    setIsParteeSessionModalVisible,
-    toggleSavedItems,
-    savedItems.length,
-    savedBadgeScaleStyle,
-    selectedFilters,
-    subcategoryFilters,
+    // Dependencies for renderHeader - remove selectedFilters/subcategoryFilters
+    // Add currentFilterEmoji itself IF NEEDED, but likely not as it's stable between renders
+    parteeSession, 
+    waiterModeActive, 
+    handleWaiterButtonPress, 
+    handleHeaderFilterPress, // <-- Add the new handler here
+    setIsParteeSessionModalVisible, 
+    toggleSavedItems, 
+    optimisticSavedCount, 
+    savedBadgeScaleStyle, 
     partyModeActive,
+    setIsOptionsModalVisible,
   ]);
 
   // Moved handleEndCoupleSession definition before renderHeader
@@ -917,7 +1108,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       );
     }
 
-    if (isFilterChanging) {
+    if (isLoadingFilteredData) {
       return (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#FF3B5C" />
@@ -962,66 +1153,20 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         />
       ))
       .reverse();
-  }, [currentIndex, activeData, handleSwipe, isFilterChanging, expandingCardId, globalExpansionProgress, handleExpandCard, handleCollapseCard]);
+  }, [currentIndex, activeData, handleSwipe, isLoadingFilteredData, expandingCardId, globalExpansionProgress, handleExpandCard, handleCollapseCard]);
 
-  // Update activeData when data prop changes
-  useEffect(() => {
-    setActiveData(data);
-  }, [data]);
-
-  // Update the filtered data to use correct property names
-  const filteredData = useMemo(() => {
-    return data.filter(item => {
-      // Filter by selected categories
-      if (selectedFilters.length > 0) {
-        const itemCategory = item.food_type || item.category || '';
-        if (!selectedFilters.includes(itemCategory)) {
-          return false;
-        }
-      }
-      return true;
-    });
-  }, [data, selectedFilters]);
-
-  // Update the renderItem function to use correct property names
-  const renderItem = ({ item, index }: { item: SupabaseMenuItem; index: number }) => {
-    const isFirst = index === currentIndex;
-    const isSecond = index === currentIndex + 1;
-    
-    if (!isFirst && !isSecond) return null;
-
-    return (
-      <FoodCard
-        key={item.id}
-        food={item}
-        onSwipe={handleSwipe}
-        isFirst={isFirst}
-        index={index}
-        expandingCardId={expandingCardId}
-        globalExpansionProgress={globalExpansionProgress}
-        onExpand={handleExpandCard}
-        onCollapse={handleCollapseCard}
-      />
-    );
-  };
-
+  // --- SIMPLIFIED LOGIC TO REPLACE COMPLEX EFFECTS ---
+  
+  // Simple, clean effects like the old version
+  
   // Animate filter row height based on visibility state
   useEffect(() => {
     if (isFilterSelectorVisible) {
-      filterRowHeight.value = withTiming(50, { duration: 250, easing: Easing.out(Easing.ease) }); // Reduced target height further
+      filterRowHeight.value = withTiming(50, { duration: 250, easing: Easing.out(Easing.ease) }); 
     } else {
-      filterRowHeight.value = withTiming(0, { duration: 200, easing: Easing.in(Easing.ease) }); // Animate to 0 height
+      filterRowHeight.value = withTiming(0, { duration: 200, easing: Easing.in(Easing.ease) }); 
     }
   }, [isFilterSelectorVisible, filterRowHeight]);
-
-  // Animated style for the filter row container
-  const filterRowAnimatedStyle = useAnimatedStyle(() => {
-    return {
-      height: filterRowHeight.value,
-      opacity: interpolate(filterRowHeight.value, [0, 25, 50], [0, 0.5, 1]), // Adjusted interpolation range
-      overflow: 'hidden', // Clip content when height is 0
-    };
-  });
 
   // --- Update ref based on joined_by --- 
   useEffect(() => {
@@ -1039,20 +1184,69 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
 
   // --- RE-ADD Effect for Fetching Initial Matches --- 
   useEffect(() => {
-    const fetchInitialMatches = async () => {
+    const fetchInitialMatches = async (retryCount = 0) => {
       if (parteeSession?.id) {
         console.log(`[SwipeableCards] Fetching initial match IDs for session: ${parteeSession.id}`);
         try {
           const initialMatchIds = await getSessionMatchIds(parteeSession.id);
+          console.log(`[SwipeableCards] Initial matches fetched: ${initialMatchIds.size} matches found`);
           setSessionMatchIds(initialMatchIds);
+          
+          // For debugging: log the actual match IDs
+          console.log(`[SwipeableCards] Match IDs: ${[...initialMatchIds].join(', ')}`);
         } catch (error) {
           console.error("Error fetching initial session match IDs:", error);
+          
+          // Retry up to 3 times with exponential backoff
+          if (retryCount < 3) {
+            const delay = Math.pow(2, retryCount) * 1000; // 1s, 2s, 4s
+            console.log(`[SwipeableCards] Retrying fetch matches in ${delay}ms (attempt ${retryCount + 1}/3)`);
+            setTimeout(() => fetchInitialMatches(retryCount + 1), delay);
+          }
         }
       } else {
         setSessionMatchIds(new Set());
       }
     };
+    
     fetchInitialMatches();
+    
+    // Fetch matches periodically every 10 seconds as an additional fallback
+    let intervalId: NodeJS.Timeout | null = null;
+    
+    if (parteeSession?.id) {
+      intervalId = setInterval(async () => {
+        try {
+          console.log(`[SwipeableCards] Periodic match check for session: ${parteeSession.id}`);
+          const currentMatchIds = await getSessionMatchIds(parteeSession.id);
+          
+          setSessionMatchIds(prevIds => {
+            // Check if we found any new matches
+            let hasNewMatches = false;
+            currentMatchIds.forEach(id => {
+              if (!prevIds.has(id)) {
+                hasNewMatches = true;
+              }
+            });
+            
+            if (hasNewMatches) {
+              console.log(`[SwipeableCards] Periodic check found new matches!`);
+              return currentMatchIds;
+            }
+            return prevIds;
+          });
+        } catch (error) {
+          console.error("Error in periodic match check:", error);
+        }
+      }, 10000); // Check every 10 seconds
+    }
+    
+    // Cleanup
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
   }, [parteeSession?.id]);
 
   // --- Effect for Realtime Subscriptions --- 
@@ -1085,32 +1279,70 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         (payload) => {
           console.log('[REALTIME] New Match Received:', payload.new);
           const newMatch = payload.new as CoupleMatch;
-          runOnJS(setSessionMatchIds)(prevIds => new Set(prevIds).add(newMatch.food_item_id));
           
-          // --- Trigger Badge Animation on Match --- 
-          runOnJS(() => {
-              savedBadgeScale.value = withSequence(
+          // Fetch ALL matches to ensure complete state on both devices
+          runOnJS(async () => {
+            try {
+              console.log(`[REALTIME] Match event triggered - Fetching ALL matches for session: ${parteeSession.id}`);
+              const allMatchIds = await getSessionMatchIds(parteeSession.id);
+              console.log(`[REALTIME] Total matches found: ${allMatchIds.size}`);
+              
+              // Update state with complete match data
+              runOnJS(setSessionMatchIds)(allMatchIds);
+              
+              // Always trigger animation and notification for the matched item
+              runOnJS(() => {
+                // Trigger badge animation
+                savedBadgeScale.value = withSequence(
                   withSpring(1.2),
                   withSpring(1)
-              );
-          });
-          
-          // Existing toast logic
-          setMatches((prev) => [...prev, newMatch]);
-          setLastMatch(newMatch);
-          runOnJS(setShowMatchToast)(true);
-          matchToastAnim.value = withTiming(1, { duration: 300 });
-          setTimeout(() => {
-            matchToastAnim.value = withTiming(0, { duration: 300 }, () => {
-              runOnJS(setShowMatchToast)(false);
-            });
-          }, 3000);
+                );
+                
+                // Show match toast
+                setMatches((prev) => [...prev, newMatch]);
+                setLastMatch(newMatch);
+                setShowMatchToast(true);
+                matchToastAnim.value = withTiming(1, { duration: 300 });
+                setTimeout(() => {
+                  matchToastAnim.value = withTiming(0, { duration: 300 }, () => {
+                    runOnJS(setShowMatchToast)(false);
+                  });
+                }, 3000);
+              })();
+            } catch (error) {
+              console.error('[REALTIME] Error fetching all matches after match event:', error);
+              Sentry.captureException(error, { extra: { sessionId: parteeSession.id, context: 'fetch all matches after match event' } });
+              
+              // Fallback to using just the event data
+              runOnJS(setSessionMatchIds)(prevIds => new Set(prevIds).add(newMatch.food_item_id));
+              runOnJS(setMatches)((prev) => [...prev, newMatch]);
+              runOnJS(setLastMatch)(newMatch);
+              runOnJS(setShowMatchToast)(true);
+              matchToastAnim.value = withTiming(1, { duration: 300 });
+              setTimeout(() => {
+                matchToastAnim.value = withTiming(0, { duration: 300 }, () => {
+                  runOnJS(setShowMatchToast)(false);
+                });
+              }, 3000);
+            }
+          })();
         }
       )
       .subscribe((status) => {
         console.log(`[REALTIME] Matches channel status: ${status}`);
         if (status === 'SUBSCRIBED') {
-          // Optionally fetch initial matches here if needed
+          // Fetch all matches whenever subscription is established/re-established
+          (async () => {
+            try {
+              console.log(`[REALTIME] Match subscription established - Fetching ALL matches for session: ${parteeSession.id}`);
+              const allMatchIds = await getSessionMatchIds(parteeSession.id);
+              console.log(`[REALTIME] Total matches found on subscribe: ${allMatchIds.size}`);
+              runOnJS(setSessionMatchIds)(allMatchIds);
+            } catch (error) {
+              console.error('[REALTIME] Error fetching matches on subscribe:', error);
+              Sentry.captureException(error, { extra: { sessionId: parteeSession.id, context: 'fetch matches on subscribe' } });
+            }
+          })();
         }
       });
 
@@ -1127,6 +1359,51 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
         },
         (payload) => {
           const newSwipe = payload.new as CoupleSwipe;
+          
+          // Fetch latest matches after ANY swipe in the session (by either user)
+          // This ensures both users have the latest match state regardless of who triggered the match
+          runOnJS(async () => {
+            try {
+              console.log(`[REALTIME] Swipe detected - Fetching latest matches for session: ${parteeSession.id}`);
+              const latestMatchIds = await getSessionMatchIds(parteeSession.id);
+              
+              // Update match IDs and check for new ones
+              setSessionMatchIds(prevIds => {
+                const updatedMatchIds = new Set([...prevIds]);
+                let foundNewMatches = false;
+                
+                latestMatchIds.forEach(id => {
+                  if (!prevIds.has(id)) {
+                    foundNewMatches = true;
+                    updatedMatchIds.add(id);
+                  }
+                });
+                
+                if (foundNewMatches) {
+                  console.log(`[REALTIME] Found new matches after swipe that weren't in local state`);
+                  // Animate match notification
+                  savedBadgeScale.value = withSequence(
+                    withSpring(1.2),
+                    withSpring(1)
+                  );
+                  
+                  // Show match toast for the newly found match(es)
+                  setShowMatchToast(true);
+                  matchToastAnim.value = withTiming(1, { duration: 300 });
+                  setTimeout(() => {
+                    matchToastAnim.value = withTiming(0, { duration: 300 }, () => {
+                      runOnJS(setShowMatchToast)(false);
+                    });
+                  }, 3000);
+                }
+                
+                return updatedMatchIds;
+              });
+            } catch (error) {
+              console.error('Error fetching latest matches after swipe notification:', error);
+              Sentry.captureException(error, { extra: { sessionId: parteeSession.id, context: 'fetch matches after swipe event' } });
+            }
+          })();
           
           // --- Check if it's the PARTNER'S LIKE --- 
           if (newSwipe.user_id !== user.id && newSwipe.decision === true) {
@@ -1260,9 +1537,9 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     // --- Cleanup --- 
     return () => {
        console.log(`[REALTIME] Unsubscribing from channels for session: ${parteeSession.id}`);
-       if (matchesChannel) supabase.removeChannel(matchesChannel).catch(err => console.warn("Error removing matches channel:", err));
-       if (swipesChannel) supabase.removeChannel(swipesChannel).catch(err => console.warn("Error removing swipes channel:", err));
-       if (sessionChannel) supabase.removeChannel(sessionChannel).catch(err => console.warn("Error removing session channel:", err));
+       if (matchesChannel) supabase.removeChannel(matchesChannel).catch(err => { console.warn("Error removing matches channel:", err); Sentry.captureException(err, { extra: { channel: 'matches' } }); });
+       if (swipesChannel) supabase.removeChannel(swipesChannel).catch(err => { console.warn("Error removing swipes channel:", err); Sentry.captureException(err, { extra: { channel: 'swipes' } }); });
+       if (sessionChannel) supabase.removeChannel(sessionChannel).catch(err => { console.warn("Error removing session channel:", err); Sentry.captureException(err, { extra: { channel: 'session' } }); });
        if (swipeThrottleRef.current) {
          clearTimeout(swipeThrottleRef.current);
        }
@@ -1283,8 +1560,10 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     
     try {
       console.log(`[SwipeableCards] Calling createCoupleSession for user: ${user.id}`);
+      Sentry.addBreadcrumb({ category: 'couple.session', message: 'Initiating session creation', level: 'info' });
       const newSession = await createCoupleSession(user.id);
       console.log('[SwipeableCards] Session created successfully:', newSession);
+      Sentry.addBreadcrumb({ category: 'couple.session', message: 'Session created successfully', level: 'info', data: { sessionId: newSession.id } });
       
       // Success: Update context, THEN close options modal, then open success modal
       setParteeSession(newSession); 
@@ -1293,6 +1572,7 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
       
     } catch (error) {
       console.error('[SwipeableCards] Failed to create session:', error);
+      Sentry.captureException(error, { extra: { userId: user.id, message: 'Error creating couple session from SwipeableCards' } });
       Alert.alert(
         "Creation Failed", 
         error instanceof Error ? error.message : "An unknown error occurred while creating the session."
@@ -1303,20 +1583,76 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
     }
   }, [user, setParteeSession, createCoupleSession, setIsOptionsModalVisible, setIsSessionCreatedModalVisible]); // Added modal setters to dependencies
 
-  // Function to open settings modal (closes saved items first)
-  const openSettingsModal = useCallback(() => {
-     setSavedItemsVisible(false); 
-     setTimeout(() => {
-        setIsSettingsModalVisible(true);
-     }, 300); 
-  }, []);
+  // --- Handler for Logout Request from Modal --- 
+  const handleLogoutRequest = useCallback(async () => {
+    console.log("[SwipeableCards] Logout requested.");
+    try {
+      // Replace this placeholder with your actual logout call:
+      Sentry.addBreadcrumb({ category: 'auth', message: 'Logout requested', level: 'info' });
+      await logout(); 
+      // Navigation likely handled by auth state listeners elsewhere
+    } catch (error) {
+      console.error("[SwipeableCards] Logout failed:", error);
+      Sentry.captureException(error, { extra: { message: 'Error during logout attempt' } });
+      Alert.alert("Logout Failed", "Could not log out. Please try again.");
+    }
+  }, [logout]); // Add logout dependency
 
-  // Update effect to set party mode active based on session existence
-  useEffect(() => {
-    setPartyModeActive(!!parteeSession);
-  }, [parteeSession]);
+  // --- Handler for Clearing All Saved Items --- 
+  const handleClearAllSaved = useCallback(() => {
+    // Only proceed if there are items to clear
+    if (optimisticSavedCount === 0) {
+      Alert.alert("No Items", "There are no saved items to clear.");
+      return;
+    }
+    
+    Alert.alert(
+      "Clear All Saved Items?",
+      "Are you sure you want to remove all your saved dishes? This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Clear All", 
+          style: "destructive",
+          onPress: async () => {
+            console.log("[SwipeableCards] User confirmed clear all.");
+            try {
+              Sentry.addBreadcrumb({ category: 'data.mutate', message: 'Initiating clear all saved items', level: 'info' });
+              await clearAllSavedItems();
+              console.log("[SwipeableCards] clearAllSavedItems completed successfully.");
+              Sentry.addBreadcrumb({ category: 'data.mutate', message: 'Clear all saved items successful', level: 'info' });
+              // Optimistic count will update via the useEffect watching savedItems
+              // Close the modal after clearing
+              toggleSavedItems(); // Or maybe keep it open? User decision.
+            } catch (clearError) {
+              console.error("[SwipeableCards] Error calling clearAllSavedItems:", clearError);
+              Sentry.captureException(clearError, { extra: { message: 'Error clearing all saved items from SwipeableCards' } });
+              Alert.alert("Clear Failed", "Could not clear saved items. Please try again.");
+            }
+          }
+        }
+      ]
+    );
+  }, [clearAllSavedItems, optimisticSavedCount, toggleSavedItems]); // Add dependencies
 
-  // Improve z-index and card container structure to prevent image peeking
+  // --- Restore savedMenuItemsForModals --- 
+  const savedMenuItemsForModals = useMemo(() => {
+    const result = savedItems.map(savedItemDetail => {
+        const mi = savedItemDetail.menu_items as unknown as (MenuItem & { restaurants?: Restaurant }); 
+        const restaurantName = mi?.restaurants?.name || 'Unknown Restaurant';
+        return {
+            ...mi, 
+            _id: mi.id,
+            _createdAt: mi.created_at,
+            title: restaurantName,
+            menu_item: mi.name,
+        } as SupabaseMenuItem;
+    });
+    console.log(`[SwipeableCards] Transformed ${result.length} items for SavedItemsModal.`);
+    return result;
+  }, [savedItems]);
+
+  // --- JSX Return --- 
   return (
     <GestureHandlerRootView style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
@@ -1325,26 +1661,30 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
           {renderHeader()}
         </View>
 
-        {/* Conditionally render Filter Row Container with Animation */}
+        {/* Conditionally render Filter Row Container with Animation - Grayed out in waiter mode */}
         <Animated.View style={[styles.filterRowWrapper, filterRowAnimatedStyle]}>
           {isFilterSelectorVisible && (
-            <View style={styles.filterRowContainer}>
+            <View style={[styles.filterRowContainer, waiterModeActive && styles.filterRowDisabled]}>
               <ScrollView 
                 horizontal 
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.filterScrollContent}
               >
-                {subcategoryFilters.map((category) => (
+                {subcategoryFilters.map((category: FilterOption) => (
                   <TouchableOpacity
                     key={category.id}
                     style={[
                       styles.filterButton,
-                      isSelected(category.id) && styles.filterButtonSelected
+                      selectedFilters.includes(category.id) && styles.filterButtonSelected,
+                      waiterModeActive && styles.filterButtonDisabled
                     ]}
-                    onPress={() => handleFilterSelect(category.id)}
-                    activeOpacity={0.7}
+                    onPress={waiterModeActive ? undefined : () => handleFilterSelect(category.id)}
+                    activeOpacity={waiterModeActive ? 1 : 0.7}
+                    disabled={waiterModeActive}
                   >
-                    <Text style={styles.filterEmojiOnly}>{category.emoji}</Text>
+                    <Text style={[styles.filterEmojiOnly, waiterModeActive && styles.filterEmojiDisabled]}>
+                      {category.emoji}
+                    </Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
@@ -1375,28 +1715,25 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
           </View>
         </View>
 
-        {/* Saved Items Modal */}
+        {/* Saved Items Modal - Pass the loading state */}
         <SavedItemsModal
           visible={savedItemsVisible}
           onClose={toggleSavedItems}
-          savedItems={savedItems}
+          savedItems={savedMenuItemsForModals}
           onWaiterMode={handleWaiterButtonPress}
           activeRestaurant={currentRestaurant}
           coupleSession={parteeSession}
           sessionMatchIds={sessionMatchIds}
-          onOpenSettings={openSettingsModal}
+          onLogoutRequest={handleLogoutRequest} 
+          onClearAll={handleClearAllSaved}
+          isLoading={savedItemsLoading} // <-- Pass loading state
         />
 
-        <SettingsModal
-           visible={isSettingsModalVisible}
-           onClose={() => setIsSettingsModalVisible(false)}
-        />
-
-        {/* Camera Selection Modal */}
+        {/* Camera Selection Modal - Pass mapped menu items */}
         <CameraSelectionModal
           visible={cameraSelectionModalVisible}
           onClose={() => setCameraSelectionModalVisible(false)}
-          savedItems={savedItems}
+          savedItems={savedMenuItemsForModals} // <-- Pass the mapped array
           onSelectItem={setSelectedItemForCamera}
         />
 
@@ -1408,10 +1745,8 @@ const SwipeableCardsComponent: React.FC<SwipeableCardsProps> = ({
             visible={showParteeMode}
             onRequestClose={handleParteeModeExit}
           >
-            <CoupleModeScreen
-              foodItems={data}
-            />
           </Modal>
+          
         )}
 
         {/* Update CoupleModeOptionsModal to pass isLoading state */}
@@ -1514,7 +1849,11 @@ const styles = StyleSheet.create({
   headerContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 8, backgroundColor: colorBackground, borderBottomWidth: 1, borderBottomColor: colorBorder },
   headerLeftContainer: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   headerCenterContainer: { /* Potentially for future use */ },
-  headerRightContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
+  headerRightContainer: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'flex-end' 
+  },
   logoTouchable: { paddingVertical: 4 },
   logoImageHeader: { width: 120, height: 42, marginLeft: 0 },
   logoTextHeader: { fontSize: 24, fontWeight: '900', color: colorAccent, fontFamily: Platform.OS === 'ios' ? 'System' : 'sans-serif', letterSpacing: -0.5, marginLeft: 5, marginRight: 10 },
@@ -1522,11 +1861,11 @@ const styles = StyleSheet.create({
   sessionCodeLabel: { fontSize: 13, fontWeight: '500', color: '#666', marginTop: 2 },
   sessionCodeHeader: { fontSize: 20, fontWeight: 'bold', color: '#FF3B5C', marginBottom: 0 },
   menuButton: { 
-    width: 40, // Match WaiterButton container size
-    height: 40, // Match WaiterButton container size
+    width: 40,
+    height: 40,
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: 8, // Keep margin
+    marginLeft: 8, // Keep this margin
   },
   menuButtonInner: {
     width: 40,
@@ -1553,7 +1892,7 @@ const styles = StyleSheet.create({
     height: 40,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 8,
+    // Remove marginRight: 8 from here, use marginLeft on the button instead
   },
   partyButtonInner: {
     width: 40,
@@ -1587,9 +1926,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6 
   },
   badgeText: { color: colorWhite, fontSize: 12, fontWeight: 'bold' },
-  headerFilterButton: { padding: 8, marginLeft: 8, backgroundColor: '#FFF0ED', borderRadius: 20 },
-  filterEmojiOnly: { fontSize: 22 },
-  headerFilterEmoji: { fontSize: 20 },
+  filterButtonContainer: { 
+    width: 40, 
+    height: 40, 
+    justifyContent: 'center',
+    alignItems: 'center',
+    // No margin needed as it's the first item in the row
+  },
+  filterButtonInner: { // New inner view for styling
+    width: 40,
+    height: 40,
+    borderRadius: 12, 
+    backgroundColor: colorWhite, // Base background
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1, 
+    borderColor: colorBorder,
+    shadowColor: colorShadow,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
+    // Optionally add a different background/border when a filter is active
+    // backgroundColor: selectedFilters.length > 0 ? '#FFF0ED' : colorWhite, 
+    // borderColor: selectedFilters.length > 0 ? colorAccent : colorBorder,
+  },
+  headerFilterEmoji: { 
+    fontSize: 20 
+  }, 
   matchToastContainer: { 
       position: 'absolute', 
       bottom: 80, 
@@ -1610,9 +1974,13 @@ const styles = StyleSheet.create({
   },
   filterRowWrapper: { backgroundColor: colorBackground },
   filterRowContainer: { paddingTop: 5, paddingBottom: 1, paddingHorizontal: 5 },
+  filterRowDisabled: { opacity: 0.5 },
   filterScrollContent: { paddingHorizontal: 5, alignItems: 'center' },
   filterButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: colorWhite, borderWidth: 1, borderColor: colorBorder, justifyContent: 'center', alignItems: 'center', marginHorizontal: 5, shadowColor: colorShadow, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 1.5, elevation: 1 },
   filterButtonSelected: { borderColor: colorAccent, borderWidth: 2, backgroundColor: '#FFF0ED' },
+  filterButtonDisabled: { backgroundColor: '#F5F5F5', borderColor: '#E0E0E0' },
+  filterEmojiOnly: { fontSize: 22 },
+  filterEmojiDisabled: { opacity: 0.4 },
   cardsOuterContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', position: 'relative', width: SCREEN_WIDTH, paddingVertical: 10, height: CARD_HEIGHT + 30, zIndex: 1, overflow: 'hidden' },
   bottomFilterBar: { paddingBottom: Platform.OS === 'ios' ? 30 : 20, paddingTop: 8, paddingHorizontal: 10, backgroundColor: colorBackground, borderTopWidth: 0, zIndex: 10, minHeight: 0 },
   ridgeContainer: { alignItems: 'center', justifyContent: 'center', height: 24, width: '100%', opacity: 0.8 },
@@ -1707,8 +2075,12 @@ const styles = StyleSheet.create({
     shadowRadius: 2.00,
     elevation: 2,
   },
+  filterButtonHeaderDisabled: {
+    backgroundColor: '#F5F5F5',
+    borderColor: '#E0E0E0',
+  },
 });
 
-const SwipeableCards = memo(SwipeableCardsComponent);
-
-export { SwipeableCards }; 
+// Wrap component with memo if appropriate
+// export default memo(SwipeableCardsComponent);
+export default SwipeableCardsComponent; // Keep as is for now

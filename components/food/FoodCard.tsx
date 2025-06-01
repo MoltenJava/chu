@@ -22,10 +22,12 @@ import Animated, {
   useAnimatedScrollHandler,
 } from 'react-native-reanimated';
 import AddToPlaylistModal from '../playlists/AddToPlaylistModal';
+import * as Sentry from '@sentry/react-native';
+import { moderateScale } from 'react-native-size-matters';
 
 // Define new color palette
 const colorBackground = '#FAFAFA'; // Off-white
-const colorTextPrimary = '#212121'; // Dark Gray
+const colorTextPrimary = '#333333'; // Dark Gray
 const colorTextSecondary = '#757575'; // Medium Gray
 const colorBorder = '#E0E0E0';     // Light Gray
 const colorAccent = '#FF6F61';     // Coral Pink
@@ -33,7 +35,7 @@ const colorWhite = '#FFFFFF';
 const colorShadow = '#BDBDBD';     // Medium Gray for shadows
 const colorLike = '#4CAF50';      // Green for Like
 const colorNope = '#F44336';      // Red for Nope
-const colorMeh = '#FFC107';       // Amber for Meh
+// const colorMeh = '#FFC107';       // Amber for Meh (no longer used)
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const CARD_WIDTH = SCREEN_WIDTH * .95;
@@ -149,12 +151,100 @@ const formatPriceLevel = (price?: string): { display: string; level: number } =>
   return { display: '$$', level: 2 }; // Default if not matching expected formats
 };
 
+// Helper function to parse a time string (e.g., "10:00PM", "[2:00AM]") and calculate minutes until that time
+const getMinutesUntilClosing = (closingTimeString: string | null | undefined): number | null => {
+  if (!closingTimeString) return null;
+
+  // Remove brackets and whitespace
+  const cleanedTime = closingTimeString.replace(/[\[\]]/g, '').trim();
+  
+  const match = cleanedTime.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+  if (!match) return null;
+
+  let hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const period = match[3] ? match[3].toUpperCase() : null;
+
+  if (period === 'PM' && hours < 12) hours += 12;
+  if (period === 'AM' && hours === 12) hours = 0; // Midnight case
+
+  if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  const now = new Date();
+  const closingDate = new Date(now);
+  closingDate.setHours(hours, minutes, 0, 0);
+
+  // If closing time has already passed today, assume it's for the next day
+  if (closingDate < now) {
+    closingDate.setDate(closingDate.getDate() + 1);
+  }
+
+  const diffMs = closingDate.getTime() - now.getTime();
+  if (diffMs < 0) return null; // Should not happen if logic above is correct, but as a safeguard
+
+  return Math.round(diffMs / 60000);
+};
+
+// Helper function to get today's restaurant hours
+const getTodaysHours = (foodItem: SupabaseMenuItem): string => {
+  if (!foodItem) return "Hours not available";
+
+  // Log the full foodItem received by the function
+  // console.log('[FoodCard] getTodaysHours - foodItem:', JSON.stringify(foodItem, null, 2));
+  console.log(`[FoodCard] getTodaysHours - Item ID: ${foodItem.id || foodItem._id}`);
+
+  const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const today = new Date().getDay(); // 0 for Sunday, 1 for Monday, etc.
+  
+  // Ensure todayKey is constructed correctly before casting
+  const dayName = days[today];
+  const hoursKey = `restaurant_${dayName}_hours` as keyof SupabaseMenuItem;
+
+  // console.log('[FoodCard] getTodaysHours - dayName:', dayName, 'hoursKey:', hoursKey);
+  console.log(`[FoodCard] getTodaysHours - Day: ${dayName}, Key: ${hoursKey}`);
+
+  const hoursToday = foodItem[hoursKey] as string | undefined | null;
+
+  // console.log('[FoodCard] getTodaysHours - value for hoursKey ("${String(hoursKey)}"):', hoursToday);
+  console.log(`[FoodCard] getTodaysHours - Hours for ${hoursKey}: ${hoursToday}`);
+
+  if (hoursToday && typeof hoursToday === 'string' && hoursToday.trim() !== "") {
+    return hoursToday;
+  }
+  return "Hours not available";
+};
+
+// NEW Helper function to parse hours string into opening and closing with bracketed, simplified times
+const parseHoursString = (hoursString: string | null | undefined): { opening: string; closing: string } | null => {
+  if (!hoursString || typeof hoursString !== 'string' || hoursString === "Hours not available" || hoursString.toLowerCase() === "closed") {
+    return null;
+  }
+
+  const parts = hoursString.split(/\s+to\s+|\s+–\s+|\s+-\s+/);
+
+  if (parts.length === 2) {
+    let opening = parts[0].trim().replace(/\s/g, ''); // Remove all spaces
+    let closing = parts[1].trim().replace(/\s/g, ''); // Remove all spaces
+
+    // Add brackets
+    opening = `[${opening.toUpperCase()}]`;
+    closing = `[${closing.toUpperCase()}]`;
+    
+    // Basic check if they still look like times (very loose)
+    if (opening.length > 2 && closing.length > 2) {
+      return { opening, closing };
+    }
+  }
+  return null; // Return null if parsing fails
+};
+
 // Define the ref type for FoodCard
 export interface FoodCardRef {
   reset: () => void;
   like: () => void;
   nope: () => void;
-  meh: () => void;
   swipeLocked: () => boolean;
 }
 
@@ -169,20 +259,19 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
     onExpand,
     onCollapse,
   } = props;
-  
-  // Add logging to track when actual prop changes occur
-  useEffect(() => {
-    console.log('[FOOD-CARD] Rendered', food.id, { isFirst, index });
-  }, [food.id, isFirst, index]);
+
+  // Log the received food prop at the start of the component
+  // console.log('[FoodCardComponent] Received food prop:', JSON.stringify(food, null, 2));
+  console.log(`[FoodCardComponent] Rendering card for food ID: ${food.id || food._id}`);
   
   const [detailsVisible, setDetailsVisible] = useState(false);
   const [isSwiping, setIsSwiping] = useState(false);
   const [showLikeIndicator, setShowLikeIndicator] = useState(false);
   const [showNopeIndicator, setShowNopeIndicator] = useState(false);
-  const [showMehIndicator, setShowMehIndicator] = useState(false);
   const [likeOpacity, setLikeOpacity] = useState(0);
   const [nopeOpacity, setNopeOpacity] = useState(0);
-  const [mehOpacity, setMehOpacity] = useState(0);
+  // const [showMehIndicator, setShowMehIndicator] = useState(false);
+  // const [mehOpacity, setMehOpacity] = useState(0);
   const [distanceInfo, setDistanceInfo] = useState<{
     distance?: number;
     duration?: number;
@@ -223,8 +312,9 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
       availableUntil: idHash % 5 === 0 ? `${(idHash % 3) + 6}PM` : null
     };
     
-    console.log(`[FOOD-CARD] Social proof data calculated for food ${food.id}:`, 
-      `isTrending=${data.isTrending}, orderCount=${data.orderCount}, isLimitedTime=${data.isLimitedTime}`);
+    // console.log(`[FOOD-CARD] Social proof data calculated for food ${food.id}:`, 
+    //  `isTrending=${data.isTrending}, orderCount=${data.orderCount}, isLimitedTime=${data.isLimitedTime}`);
+    console.log(`[FoodCard] SocialProof for ${food.id}: Trend=${data.isTrending}, Orders=${data.orderCount}, Limited=${data.isLimitedTime}`);
     
     return data;
   }, [food.id]); // Only recalculate when food.id changes
@@ -238,22 +328,28 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
       menu_item: food.menu_item || food.name || 'Untitled Food',
       description: food.description || 'No description available',
       s3_url: food.s3_url || 'https://via.placeholder.com/400',
-      title: food.restaurant?.name || food.title || 'Unknown Restaurant',
+      title: food.title || 'Unknown Restaurant',
       price: food.price || 0,
       price_level: food.price_level || '$$',
-      food_type: food.food_type || food.category || 'comfort',
+      food_type: food.food_type || 'comfort',
       address: food.address || '',
       latitude: food.latitude || 0,
       longitude: food.longitude || 0,
       uber_eats_url: food.uber_eats_url || '',
       doordash_url: food.doordash_url || '',
       postmates_url: food.postmates_url || '',
-      distance_from_user: food.distance_from_user || 0,
-      estimated_duration: food.estimated_duration || 0
+      // Ensure all hour fields from SupabaseMenuItem are included with fallbacks
+      restaurant_sunday_hours: food.restaurant_sunday_hours || null,
+      restaurant_monday_hours: food.restaurant_monday_hours || null,
+      restaurant_tuesday_hours: food.restaurant_tuesday_hours || null,
+      restaurant_wednesday_hours: food.restaurant_wednesday_hours || null,
+      restaurant_thursday_hours: food.restaurant_thursday_hours || null,
+      restaurant_friday_hours: food.restaurant_friday_hours || null,
+      restaurant_saturday_hours: food.restaurant_saturday_hours || null,
     };
     return {
       ...base,
-      id: food.id || base.id
+      id: food.id || `fallback-id-${Date.now()}-${Math.random()}` // Added a more robust fallback for ID
     };
   }, [food]);
 
@@ -291,7 +387,6 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
       if (current.isSwiping) {
         const rightOpacity = Math.min(Math.max(current.x / SWIPE_THRESHOLD, 0), 1);
         const leftOpacity = Math.min(Math.max(-current.x / SWIPE_THRESHOLD, 0), 1);
-        const upOpacity = Math.min(Math.max(-current.y / SWIPE_THRESHOLD, 0), 1);
         
         if (rightOpacity > 0) {
           runOnJS(setShowLikeIndicator)(true);
@@ -305,22 +400,13 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
           runOnJS(setShowNopeIndicator)(false);
         }
         
-        if (upOpacity > 0) {
-          runOnJS(setShowMehIndicator)(true);
-        } else {
-          runOnJS(setShowMehIndicator)(false);
-        }
-        
         runOnJS(setLikeOpacity)(rightOpacity);
         runOnJS(setNopeOpacity)(leftOpacity);
-        runOnJS(setMehOpacity)(upOpacity);
       } else {
         runOnJS(setShowLikeIndicator)(false);
         runOnJS(setShowNopeIndicator)(false);
-        runOnJS(setShowMehIndicator)(false);
         runOnJS(setLikeOpacity)(0);
         runOnJS(setNopeOpacity)(0);
-        runOnJS(setMehOpacity)(0);
       }
     },
     [isSwiping]
@@ -370,10 +456,8 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
       setIsSwiping(false);
       setShowLikeIndicator(false);
       setShowNopeIndicator(false);
-      setShowMehIndicator(false);
       setLikeOpacity(0);
       setNopeOpacity(0);
-      setMehOpacity(0);
     }
   }, [translateX, translateY]);
 
@@ -381,43 +465,53 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
     try {
       if (!isMountedRef.current) return;
       
+      // Ensure the menuItem object strictly conforms to SupabaseMenuItem
       const menuItem: SupabaseMenuItem = {
         id: food.id,
-        _id: food.id,
+        _id: food._id, // Assuming _id is same as id for this context
         _createdAt: food._createdAt,
-        restaurant_id: food.restaurant_id ?? '',
-        name: food.menu_item,
-        menu_item: food.menu_item,
+        restaurant_id: food.restaurant_id ?? null,
+        name: food.name, // Primary dish name from SupabaseMenuItem
+        menu_item: food.menu_item, // menu_item field from SupabaseMenuItem (often same as name)
         description: food.description,
         price: food.price,
-        category: food.food_type ?? '',
         s3_url: food.s3_url,
-        created_at: food._createdAt,
-        updated_at: food.updated_at ?? food._createdAt,
-        title: food.title,
-        price_level: food.price_level ?? '',
-        food_type: food.food_type,
-        dietary_info: food.dietary_info ?? {
-          vegan: false,
-          vegetarian: false,
-          gluten_free: false,
-          dairy_free: false,
-          halal: false,
-          kosher: false,
-          nut_free: false
-        },
-        spiciness: food.spiciness ?? 0,
-        popularity_score: food.popularity_score ?? 0,
-        available: food.available ?? true,
-        cuisine: food.cuisine,
-        distance_from_user: food.distance_from_user,
-        estimated_duration: food.estimated_duration,
+        created_at: food.created_at, // Use created_at from food prop
+        updated_at: food.updated_at, // Use updated_at from food prop
+        title: food.title || 'Unknown Restaurant',
+        price_level: food.price_level ?? '$$',
+        food_type: food.food_type, // Correctly use food_type
+        
+        // Flattened restaurant details from SupabaseMenuItem
         address: food.address,
         latitude: food.latitude,
         longitude: food.longitude,
-        uber_eats_url: food.uber_eats_url,
+        restaurant_price_level: food.restaurant_price_level, // This is on SupabaseMenuItem
+
+        // Array fields from SupabaseMenuItem
+        dish_types: food.dish_types,
+        cuisines: food.cuisines,
+        diets_and_styles: food.diets_and_styles,
+        meal_timing: food.meal_timing,
+        drinks_and_snacks: food.drinks_and_snacks,
+
+        // Numeric scores and values from SupabaseMenuItem
+        spiciness: food.spiciness,
+        QualityScore: food.QualityScore,
+        aesthetic_score: food.aesthetic_score,
+        sweet_savory: food.sweet_savory,
+        healthy_indulgent: food.healthy_indulgent,
+        safe_adventurous: food.safe_adventurous,
+
+        // URLs from SupabaseMenuItem
         doordash_url: food.doordash_url,
-        postmates_url: food.postmates_url
+        uber_eats_url: food.uber_eats_url,
+        postmates_url: food.postmates_url,
+        
+        // Other fields from SupabaseMenuItem
+        image_index: food.image_index,
+        distance_from_user: food.distance_from_user,
+        estimated_duration: food.estimated_duration
       };
       
       onSwipe(menuItem, direction);
@@ -543,8 +637,6 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
       
       if (Math.abs(translateX.value) > SWIPE_THRESHOLD) {
         direction = translateX.value > 0 ? 'right' : 'left';
-      } else if (Math.abs(translateY.value) > SWIPE_THRESHOLD) {
-        direction = 'down';
       }
       
       if (direction) {
@@ -556,10 +648,6 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
           runOnJS(setIsSwiping)(false);
           runOnJS(safeExecuteSwipe)(validatedFood, direction!);
         });
-        translateY.value = withTiming(
-          direction === 'down' ? SCREEN_HEIGHT : 0,
-          { duration: 250 }
-        );
       } else {
         translateX.value = withSpring(0);
         translateY.value = withSpring(0);
@@ -609,30 +697,36 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
     });
   }, [validatedFood, translateX, safeExecuteSwipe, isFirst, expandingCardId]);
 
-  const handleMeh = useCallback(() => {
-    if (!isFirst || swipeLockRef.current || expandingCardId !== null) return;
-    
-    swipeLockRef.current = true;
-    setIsSwiping(true);
-    setShowMehIndicator(true);
-    setMehOpacity(1);
-    
-    translateY.value = withTiming(SCREEN_HEIGHT, { duration: 300 }, () => {
-      runOnJS(safeExecuteSwipe)(validatedFood, 'down');
-    });
-  }, [validatedFood, translateY, safeExecuteSwipe, isFirst, expandingCardId]);
+  // const handleMeh = useCallback(() => {
+  //   if (!isFirst || swipeLockRef.current || expandingCardId !== null) return;
+  //   
+  //   swipeLockRef.current = true;
+  //   setIsSwiping(true);
+  //   setShowMehIndicator(true);
+  //   setMehOpacity(1);
+  //   
+  //   translateY.value = withTiming(SCREEN_HEIGHT, { duration: 300 }, () => {
+  //     // runOnJS(safeExecuteSwipe)(validatedFood, 'down'); // Removed: meh swipe no longer supported
+  //     runOnJS(setIsSwiping)(false);
+  //   });
+  // }, [validatedFood, translateY, safeExecuteSwipe, isFirst, expandingCardId]);
 
   const renderDistanceInfo = useCallback(() => {
+    if (validatedFood.distance_from_user === undefined) { // Only check for distance now
+      return null; 
+    }
     return (
       <View style={styles.distanceInfoContainer}>
+        {validatedFood.distance_from_user !== undefined && (
+          <>
         <FontAwesome5 name="map-marker-alt" size={16} color={colorAccent} style={styles.distanceIcon} />
-        <Text style={styles.distanceText}>1 mi</Text>
-        <Text style={styles.distanceSeparator}>•</Text>
-        <MaterialIcons name="access-time" size={16} color={colorAccent} style={styles.distanceIcon} />
-        <Text style={styles.distanceText}>5 min</Text>
+            <Text style={styles.distanceText}>{formatDistance(validatedFood.distance_from_user)}</Text>
+          </>
+        )}
+        {/* Entire duration block and separator logic removed */}
       </View>
     );
-  }, []);
+  }, [validatedFood.distance_from_user]); // Only depend on distance_from_user
 
   const socialProofBadges = useMemo(() => {
     return (
@@ -664,6 +758,33 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
     console.log(`[FOOD-CARD] CardContent rendering for food ${validatedFood.id}, isFirst=${isFirst}, index=${index}`);
     console.log(`[FOOD-CARD] Restaurant name: "${validatedFood.title}"`);
     const isThisCardExpanded = expandingCardId === validatedFood.id;
+
+    const rawTodaysHours = getTodaysHours(validatedFood);
+    const parsedNeonHours = parseHoursString(rawTodaysHours);
+    let minutesUntilClosing: number | null = null;
+    if (parsedNeonHours && parsedNeonHours.closing) {
+      minutesUntilClosing = getMinutesUntilClosing(parsedNeonHours.closing);
+    }
+
+    let displayTimeInfo: {
+      type: 'closingSoon' | 'open24Hours' | 'parsedHours' | 'rawHours' | 'notAvailable';
+      minutes?: number;
+      opening?: string;
+      closing?: string;
+      hours?: string;
+    } | null = null;
+
+    if (minutesUntilClosing !== null && minutesUntilClosing >= 0 && minutesUntilClosing <= 60) {
+      displayTimeInfo = { type: 'closingSoon', minutes: minutesUntilClosing };
+    } else if (rawTodaysHours && rawTodaysHours.toLowerCase().includes('24 hours')) {
+      displayTimeInfo = { type: 'open24Hours' };
+    } else if (parsedNeonHours) {
+      displayTimeInfo = { type: 'parsedHours', opening: parsedNeonHours.opening, closing: parsedNeonHours.closing };
+    } else if (rawTodaysHours && rawTodaysHours.trim() !== "" && rawTodaysHours !== "Hours not available") {
+      displayTimeInfo = { type: 'rawHours', hours: rawTodaysHours };
+    } else {
+      displayTimeInfo = { type: 'notAvailable' };
+    }
 
     return (
       <>
@@ -713,54 +834,94 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
         </View>
         
         <View style={styles.cardContent}>
-          <View style={styles.textFlexContainer}> 
-            <TouchableOpacity 
-              onPress={() => { 
-                  if (expandingCardId === null) { 
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                      onExpand(validatedFood.id); 
-                  }
-              }} 
-              activeOpacity={0.7}
-              disabled={!isFirst || expandingCardId !== null}
-            >
-              <Animated.Text 
-                style={styles.name} 
-                numberOfLines={isThisCardExpanded ? undefined : 2}
-                ellipsizeMode="tail"
-                // Add shared transition props
-                sharedTransitionTag={nameTransitionTag}
-                // Use default Layout animation
-                layout={Layout}
+          <View style={styles.mainInfoContainer}>
+            <View style={styles.titleAndRestaurantContainer}>
+              <TouchableOpacity 
+                onPress={() => { 
+                    if (expandingCardId === null) { 
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                        onExpand(validatedFood.id); 
+                    }
+                }} 
+                activeOpacity={0.7}
+                disabled={!isFirst || expandingCardId !== null}
               >
-                {validatedFood.menu_item}
-              </Animated.Text>
-            </TouchableOpacity>
-            
-            <View style={styles.detailsRow}>
+                <Animated.Text 
+                  style={styles.name} 
+                  numberOfLines={isThisCardExpanded ? undefined : 2}
+                  ellipsizeMode="tail"
+                  // Add shared transition props
+                  // sharedTransitionTag={nameTransitionTag}
+                  // Use default Layout animation
+                  // layout={Layout}
+                >
+                  {validatedFood.menu_item}
+                </Animated.Text>
+              </TouchableOpacity>
+              
               <Text style={styles.restaurant} numberOfLines={1} ellipsizeMode="tail">
                 {validatedFood.title}
               </Text>
             </View>
+
+            {/* Countdown/Hours panel REMOVED from here (right of title) */}
           </View>
           
           <View style={styles.metadataRow}>
-            {validatedFood.price_level && (
-              <View style={styles.priceContainer}>
-                <Text style={styles.priceText}>{priceInfo.display}</Text>
-              </View>
-            )}
-            
-            {renderDistanceInfo()}
+            {/* Left Slot: Price */}
+            <View style={styles.metaLeftSlot}>
+              {validatedFood.price_level && (
+                <View style={styles.priceContainer}>
+                  <Text style={styles.priceText}>{priceInfo.display}</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Center Slot: Time Info */}
+            <View style={styles.metaCenterSlot}>
+              {displayTimeInfo?.type === 'closingSoon' && (
+                <View style={styles.closingSoonPanel}>
+                  <MaterialCommunityIcons name="timer-sand" size={moderateScale(14)} color={colorAccent} style={styles.closingSoonIcon} />
+                  <Text style={styles.closingSoonText}>
+                    Closing in {displayTimeInfo.minutes} min!
+                  </Text>
+                </View>
+              )}
+              {displayTimeInfo?.type === 'open24Hours' && (
+                <View style={styles.timeInfoItem}>
+                  <MaterialCommunityIcons name="calendar-clock" size={moderateScale(14)} color={colorTextSecondary} style={styles.timeInfoIcon} />
+                  <Text style={styles.timeInfoText}>Open 24 Hours</Text>
+                </View>
+              )}
+              {displayTimeInfo?.type === 'parsedHours' && (
+                <View style={styles.timeInfoItem}>
+                  <MaterialCommunityIcons name="clock-outline" size={moderateScale(14)} color={colorTextSecondary} style={styles.timeInfoIcon} />
+                  <Text style={styles.timeInfoText}>{`${displayTimeInfo.opening} - ${displayTimeInfo.closing}`.replace(/[\[\]]/g, '')}</Text>
+                </View>
+              )}
+              {displayTimeInfo?.type === 'rawHours' && (
+                <View style={styles.timeInfoItem}>
+                  <MaterialCommunityIcons name="clock-outline" size={moderateScale(14)} color={colorTextSecondary} style={styles.timeInfoIcon} />
+                  <Text style={styles.timeInfoText}>{displayTimeInfo.hours}</Text>
+                </View>
+              )}
+              {/* Optionally, handle 'notAvailable' with a placeholder or leave empty */}
+            </View>
+
+            {/* Right Slot: Distance Info */}
+            <View style={styles.metaRightSlot}>
+              {renderDistanceInfo()} 
+            </View>
           </View>
         </View>
       </>
     );
   }, [
-    validatedFood.id, validatedFood.s3_url, validatedFood.menu_item, validatedFood.title, validatedFood.price_level,
-    isImageLoading, isImageLoaded, socialProofBadges, renderDistanceInfo, priceInfo,
+    validatedFood, // Main dependency for validated data
+    isImageLoading, isImageLoaded, socialProofBadges, priceInfo,
     isFirst, index, toggleDetails, 
-    expandingCardId, onExpand
+    expandingCardId, onExpand, // Expansion related props
+    // getTodaysHours, parseHoursString, getMinutesUntilClosing are stable if defined outside
   ]);
 
   // Update expandedImageStyle to be collapsible
@@ -819,53 +980,83 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
     }
   }, []);
 
-  const renderDetailsModal = () => (
-    <Modal
-      visible={detailsVisible}
-      transparent
-      animationType="slide"
-      onRequestClose={closeDetails}
-    >
-      <View style={styles.modalContainer}>
-        <View style={styles.modalContent}>
-          <TouchableOpacity 
-            style={styles.modalCloseButton}
-            onPress={closeDetails}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="close" size={28} color="#fff" />
-          </TouchableOpacity>
-          <Image 
-            source={{ uri: validatedFood.s3_url }} 
-            style={styles.modalImage}
-            onLoadStart={() => setIsImageLoading(true)}
-            onLoadEnd={() => {
-              setIsImageLoading(false);
-              setIsImageLoaded(true);
-            }}
-          />
-          <View style={styles.modalInfo}>
-            <Text style={styles.modalTitle}>{validatedFood.menu_item}</Text>
-            <Text style={styles.modalRestaurant}>{validatedFood.title}</Text>
-            <Text style={styles.modalDescription}>{validatedFood.description}</Text>
-            <Text style={styles.modalPrice}>
-              {validatedFood.price ? `$${validatedFood.price.toFixed(2)}` : priceInfo.display}
-            </Text>
-            <View style={styles.modalDistanceContainer}>
-              <FontAwesome5 name="map-marker-alt" size={16} color={colorAccent} style={styles.distanceIcon} />
-              <Text style={styles.modalDistanceText}>1 mi</Text>
-              <Text style={styles.distanceSeparator}>•</Text>
-              <MaterialIcons name="access-time" size={16} color={colorAccent} style={styles.distanceIcon} />
-              <Text style={styles.modalDistanceText}>5 min</Text>
+  const renderDetailsModal = () => {
+    if (!detailsVisible) return null;
+    const rawModalHours = getTodaysHours(validatedFood);
+    const parsedModalNeonHours = parseHoursString(rawModalHours);
+
+    return (
+      <Modal
+        visible={detailsVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={closeDetails}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <TouchableOpacity 
+              style={styles.modalCloseButton}
+              onPress={closeDetails}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="close" size={28} color="#fff" />
+            </TouchableOpacity>
+            <Image 
+              source={{ uri: validatedFood.s3_url }} 
+              style={styles.modalImage}
+              onLoadStart={() => setIsImageLoading(true)}
+              onLoadEnd={() => {
+                setIsImageLoading(false);
+                setIsImageLoaded(true);
+              }}
+            />
+            <View style={styles.modalInfo}>
+              <Text style={styles.modalTitle}>{validatedFood.menu_item}</Text>
+              <Text style={styles.modalRestaurant}>{validatedFood.title}</Text>
+              <Text style={styles.modalDescription}>{validatedFood.description}</Text>
+              <Text style={styles.modalPrice}>
+                {validatedFood.price ? `$${validatedFood.price.toFixed(2)}` : priceInfo.display}
+              </Text>
+              <View style={styles.modalDistanceContainer}>
+                {renderDistanceInfo()}
+              </View>
+              {validatedFood.address && (
+                <Text style={styles.modalAddress}>{validatedFood.address}</Text>
+              )}
+              {/* HOURS IN MODAL */}
+              {(() => {
+                const rawModalHours = getTodaysHours(validatedFood);
+                const parsedModalNeonHours = parseHoursString(rawModalHours);
+
+                if (parsedModalNeonHours) {
+                  return (
+                    <View style={styles.modalNeonHoursPanel}>
+                      <Text style={[styles.modalNeonPanelText, styles.neonOpeningTime]}>{parsedModalNeonHours.opening}</Text>
+                      <Text style={[styles.modalNeonPanelText, styles.neonClosingTime]}>{parsedModalNeonHours.closing}</Text>
+                    </View>
+                  );
+                } else if (rawModalHours && rawModalHours.trim() !== "" && rawModalHours !== "Hours not available") {
+                  return (
+                    <View style={styles.modalMetaItem}>
+                      <MaterialCommunityIcons name="clock-outline" size={moderateScale(16)} color={colorTextSecondary} style={styles.modalMetaIcon} />
+                      <Text style={styles.modalMetaText}>{rawModalHours}</Text>
+                    </View>
+                  );
+                } else {
+                  return (
+                    <View style={styles.modalMetaItem}>
+                      <MaterialCommunityIcons name="clock-alert-outline" size={moderateScale(16)} color={colorTextSecondary} style={styles.modalMetaIcon} />
+                      <Text style={styles.modalMetaText}>Hours not available</Text>
+                    </View>
+                  );
+                }
+              })()}
             </View>
-            {validatedFood.address && (
-              <Text style={styles.modalAddress}>{validatedFood.address}</Text>
-            )}
           </View>
         </View>
-      </View>
-    </Modal>
-  );
+      </Modal>
+    );
+  };
 
   // Re-add Order Modal render function
   const renderOrderModal = () => {
@@ -996,7 +1187,6 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
       reset: resetCard,
       like: handleLike,
       nope: handleNope,
-      meh: handleMeh,
       swipeLocked: () => swipeLockRef.current
     })
   );
@@ -1048,11 +1238,11 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
                                 <Text style={styles.indicatorText}>NOPE</Text>
                             </View>
                         )}
-                        {expandingCardId === null && showMehIndicator && (
+                        {/* {expandingCardId === null && showMehIndicator && (
                             <View style={[styles.mehIndicator, { opacity: mehOpacity }]}>
                                 <Text style={styles.indicatorText}>MEH</Text>
                             </View>
-                        )}
+                        )} */}
                       </>
                     ) : (
                       // --- Expanded Full-Screen View ---
@@ -1082,22 +1272,29 @@ const FoodCardComponent = forwardRef<FoodCardRef, FoodCardProps>((props, ref) =>
                         <Animated.ScrollView 
                             style={styles.expandedScrollView}
                             contentContainerStyle={styles.expandedScrollContent}
-                            showsVerticalScrollIndicator={false}
+                            showsVerticalScrollIndicator={true}
                             onScroll={scrollHandler}
                             scrollEventThrottle={16} 
-                            // Add deceleration rate
-                            decelerationRate="fast"
-                            // Explicitly enable bouncing for smoother end scroll (iOS)
-                            bounces={true} 
+                            // Improve scroll behavior for smoother scrolling
+                            decelerationRate={0.85}
+                            // Explicitly enable bouncing for smoother end scroll
+                            bounces={true}
+                            // Add overscroll behavior for better elasticity  
+                            overScrollMode="always"
+                            // Add momentum scrolling
+                            alwaysBounceVertical={true}
+                            // Increase scroll end threshold to prevent jerky stopping
+                            snapToOffsets={undefined}
+                            snapToEnd={false}
                         >
                           <Animated.View style={expandedContentStyle}>
                               {/* Content from CardContent (Name, Restaurant, Meta) */} 
                               <Animated.Text 
                                 style={styles.expandedName} 
                                 // Add shared transition props (MUST match)
-                                sharedTransitionTag={nameTransitionTag}
+                                // sharedTransitionTag={nameTransitionTag}
                                 // Use default Layout animation
-                                layout={Layout} 
+                                // layout={Layout} 
                               >
                                 {validatedFood.menu_item}
                               </Animated.Text>
@@ -1324,9 +1521,9 @@ const styles = StyleSheet.create({
   nopeLabelText: {
     color: colorAccent,
   },
-  mehLabelText: {
-    color: colorMeh,
-  },
+  // mehLabelText: {
+  //   color: colorMeh,
+  // },
   detailsButton: {
     position: 'absolute',
     bottom: 16,
@@ -1470,7 +1667,17 @@ const styles = StyleSheet.create({
     padding: 15,
     backgroundColor: colorWhite,
     height: TEXT_CONTENT_HEIGHT,
-    justifyContent: 'space-between',
+    justifyContent: 'space-between', // Distribute space between main info and metadata
+  },
+  mainInfoContainer: { // New container for title/restaurant and neon panel
+    flexDirection: 'row',
+    justifyContent: 'space-between', // Puts title block left, neon panel right
+    alignItems: 'flex-start', // Align items to the top of this container
+    marginBottom: moderateScale(5), // Space before metadataRow
+  },
+  titleAndRestaurantContainer: { // Wraps title and restaurant name
+    flex: 1, // Takes available space, pushing neon panel to the right
+    marginRight: moderateScale(10), // Space before the neon panel
   },
   textFlexContainer: {
     flex: 1,
@@ -1490,6 +1697,9 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     marginBottom: 4,
     lineHeight: 24,
+    flexWrap: 'wrap',
+    minHeight: 24,
+    height: 'auto',
   },
   restaurant: {
     color: colorTextSecondary,
@@ -1501,11 +1711,40 @@ const styles = StyleSheet.create({
   },
   metadataRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'space-between', // Key for slot distribution
     alignItems: 'center',
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap', // Prevent wrapping, manage content within slots
     marginTop: 'auto',
     paddingTop: 4,
+  },
+  metaLeftSlot: {
+    // Takes space needed for price
+    marginRight: moderateScale(4), // Add some margin if there's content in center/right
+  },
+  metaCenterSlot: {
+    flex: 1, // Takes up remaining space in the middle
+    alignItems: 'center', // Center the time content
+    marginHorizontal: moderateScale(4),
+  },
+  metaRightSlot: {
+    // Takes space needed for distance
+    marginLeft: moderateScale(4), // Add some margin if there's content in center/left
+  },
+  timeInfoItem: { // New style for centered time info (24h, parsed hours, raw hours)
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: moderateScale(4),
+    paddingHorizontal: moderateScale(6),
+    borderRadius: moderateScale(6),
+    backgroundColor: 'transparent', // Default transparent, can be styled if needed
+  },
+  timeInfoIcon: {
+    marginRight: moderateScale(4),
+  },
+  timeInfoText: {
+    fontSize: moderateScale(12),
+    color: colorTextSecondary,
+    fontWeight: '500',
   },
   priceContainer: {
     flexDirection: 'row',
@@ -1532,12 +1771,6 @@ const styles = StyleSheet.create({
     color: colorTextPrimary,
     fontWeight: '700',
     letterSpacing: 0.3,
-  },
-  distanceSeparator: {
-    fontSize: 14,
-    color: colorTextPrimary,
-    fontWeight: 'bold',
-    marginHorizontal: 6,
   },
   modalContainer: {
     flex: 1,
@@ -1595,18 +1828,25 @@ const styles = StyleSheet.create({
   modalDistanceContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 10,
-  },
-  modalDistanceText: {
-    fontSize: 16,
-    color: colorTextPrimary,
-    fontWeight: '700',
-    letterSpacing: 0.3,
+    marginBottom: 10,
   },
   modalAddress: {
     fontSize: 16,
     color: colorTextSecondary,
-    marginTop: 10,
+    marginBottom: 15, // Space before hours
+  },
+  modalMetaItem: { // Style for hours in modal
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 5, // Add some space above the hours
+    marginBottom: 10, // Space below hours
+  },
+  modalMetaIcon: {
+    marginRight: 6,
+  },
+  modalMetaText: {
+    fontSize: 15,
+    color: colorTextSecondary,
   },
   likeIndicator: {
     position: 'absolute',
@@ -1632,18 +1872,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(244, 67, 54, 0.8)',
     zIndex: 10,
   },
-  mehIndicator: {
-    position: 'absolute',
-    top: 40,
-    alignSelf: 'center',
-    transform: [{ rotate: '0deg' }],
-    borderWidth: 5,
-    borderColor: colorMeh,
-    borderRadius: 5,
-    padding: 8,
-    backgroundColor: 'rgba(255, 193, 7, 0.8)',
-    zIndex: 10,
-  },
+  // mehIndicator: {
+  //   position: 'absolute',
+  //   top: 40,
+  //   alignSelf: 'center',
+  //   transform: [{ rotate: '0deg' }],
+  //   borderWidth: 5,
+  //   borderColor: colorMeh,
+  //   borderRadius: 5,
+  //   padding: 8,
+  //   backgroundColor: 'rgba(255, 193, 7, 0.8)',
+  //   zIndex: 10,
+  // },
   indicatorText: {
     fontSize: 42,
     fontWeight: '900',
@@ -1793,7 +2033,7 @@ const styles = StyleSheet.create({
   expandedScrollContent: {
     paddingHorizontal: 20,
     paddingTop: 20,
-    paddingBottom: 150, // INCREASED bottom padding
+    paddingBottom: 300, // Increased bottom padding for better scrolling experience
   },
   expandedName: {
     fontSize: 28, 
@@ -1882,6 +2122,125 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colorAccent,
   },
+  restaurantInfoContainer: {
+    flexDirection: 'column', // Changed to column for hours to be below name
+    alignItems: 'flex-start', // Align items to the start
+    marginBottom: moderateScale(6), // Add some margin below
+  },
+  restaurantName: {
+    fontSize: moderateScale(18), // Slightly smaller to accommodate hours
+    fontFamily: 'System',
+    fontWeight: '600',
+    color: colorTextPrimary,
+    flexShrink: 1, // Allow shrinking if name is too long
+    // marginBottom: moderateScale(2), // Optional: if you want space between name and hours
+  },
+  hoursText: {
+    fontSize: moderateScale(12),
+    fontFamily: 'System',
+    color: colorTextSecondary,
+    flexShrink: 1,
+    marginTop: moderateScale(2), // Space above the hours text
+  },
+  detailTitle: {
+    fontSize: moderateScale(24),
+    fontFamily: 'System',
+    fontWeight: 'bold',
+    color: colorTextPrimary,
+    marginBottom: moderateScale(4), // Reduced margin for hours
+  },
+  detailMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: moderateScale(12),
+    flexWrap: 'wrap', // Allow wrapping if content is too long
+  },
+  detailMetaText: {
+    fontSize: moderateScale(14),
+    fontFamily: 'System',
+    color: colorTextSecondary,
+    marginRight: moderateScale(4), // Keep some space
+  },
+  detailMetaSeparator: {
+    fontSize: moderateScale(14),
+    fontFamily: 'System',
+    color: colorTextSecondary,
+    marginHorizontal: moderateScale(4),
+  },
+  metaItem: { // Style for distance/duration items, and now hours on main card
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.8)', // Slightly transparent white
+    borderRadius: moderateScale(12),
+    paddingHorizontal: moderateScale(8),
+    paddingVertical: moderateScale(4),
+    marginLeft: moderateScale(6), // Add some spacing between items
+  },
+  metaIcon: {
+    marginRight: moderateScale(4),
+  },
+  metaText: {
+    fontSize: moderateScale(12),
+    color: colorTextSecondary, // Medium gray for text
+    fontWeight: '500',
+  },
+  // NEON HOURS STYLES (MAIN CARD)
+  neonHoursPanel: {
+    flexDirection: 'column',
+    alignItems: 'center', // Center align the [TIME] texts
+    backgroundColor: 'transparent', // Removed black background
+    paddingVertical: moderateScale(6),
+    paddingHorizontal: moderateScale(8),
+    borderRadius: moderateScale(6),
+    // No marginLeft here, positioning is handled by mainInfoContainer
+  },
+  neonPanelText: {
+    fontSize: moderateScale(15), // Made bigger
+    fontWeight: '900', // Made bolder
+    color: colorWhite, // Default color, overridden by specific opening/closing
+    lineHeight: moderateScale(18), // Adjust line height for closer stacking
+  },
+  neonOpeningTime: {
+    color: '#32CD32', // Lime Green
+  },
+  neonClosingTime: {
+    color: '#FF0000', // Bright Red
+  },
+  closingSoonPanel: { // New style for the countdown
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF0ED', // Light Coral background
+    paddingVertical: moderateScale(4),
+    paddingHorizontal: moderateScale(8),
+    borderRadius: moderateScale(6),
+  },
+  closingSoonIcon: {
+    marginRight: moderateScale(4),
+  },
+  closingSoonText: {
+    fontSize: moderateScale(12),
+    fontWeight: '600',
+    color: colorAccent, // Coral text
+  },
+
+  // MODAL NEON HOURS STYLES
+  modalNeonHoursPanel: {
+    flexDirection: 'column',
+    alignItems: 'flex-start', // Align to left in modal
+    backgroundColor: '#1C1C1C',
+    paddingVertical: moderateScale(8),
+    paddingHorizontal: moderateScale(10),
+    borderRadius: moderateScale(8),
+    marginVertical: moderateScale(10), // Space around the panel in modal
+  },
+  modalNeonPanelText: {
+    fontSize: moderateScale(16), // Slightly larger for modal
+    fontWeight: '900',
+    color: colorWhite,
+    lineHeight: moderateScale(20),
+  },
+  // neonOpeningTime and neonClosingTime (colors) can be reused
+
 });
 
 

@@ -1,18 +1,32 @@
-import { FoodItem } from '../types/food';
+import { FoodItem, DisplayableFoodItem } from '../types/food';
+import { SupabaseMenuItem } from '../types/supabase';
 
 // Google API key
 const GOOGLE_API_KEY = 'AIzaSyBaaoBruSs1Wl0YbmXqErLl6w8ZiepPdwk';
 
 // Default user location (Westwood, LA)
-const DEFAULT_USER_LOCATION = {
+export const DEFAULT_USER_LOCATION = {
   latitude: 34.04053500,
   longitude: -118.44994500
 };
+
+// Chewzee Service Area Definition
+const SERVICE_AREA_CENTER: Coordinates = DEFAULT_USER_LOCATION; // Centered around Westwood
+const SERVICE_AREA_RADIUS_MILES = 5; // 5-mile radius
 
 // Interface for location coordinates
 export interface Coordinates {
   latitude: number;
   longitude: number;
+}
+
+interface RouteInfo {
+  distanceMeters: number;
+  duration: number;
+  status: {
+    code: number;
+    message: string;
+  };
 }
 
 /**
@@ -30,7 +44,7 @@ export const calculateDistance = async (
     // Use the new Google Routes API
     const url = 'https://routes.googleapis.com/directions/v2:computeRoutes';
     
-    console.log(`Making Routes API request from ${origin.latitude},${origin.longitude} to ${destination.latitude},${destination.longitude}`);
+    // console.log(`Making Routes API request from ${origin.latitude},${origin.longitude} to ${destination.latitude},${destination.longitude}`);
     
     const requestBody = {
       origin: {
@@ -63,7 +77,7 @@ export const calculateDistance = async (
     });
 
     if (!response.ok) {
-      console.warn(`API request failed with status ${response.status}. Falling back to calculation.`);
+      // console.warn(`API request failed with status ${response.status}. Falling back to calculation.`);
       throw new Error(`API request failed with status ${response.status}`);
     }
 
@@ -81,7 +95,7 @@ export const calculateDistance = async (
       // Convert meters to miles
       const distanceInMiles = distanceInMeters * 0.000621371;
       
-      console.log(`Routes API success: ${distanceInMiles.toFixed(2)} miles, ${durationInSeconds} seconds`);
+      //console.log(`Routes API success: ${distanceInMiles.toFixed(2)} miles, ${durationInSeconds} seconds`);
       
       return {
         distance: distanceInMiles,
@@ -89,15 +103,15 @@ export const calculateDistance = async (
       };
     }
     
-    console.warn(`Routes API failed: No routes returned. Falling back to calculation.`);
+    // console.warn(`Routes API failed: No routes returned. Falling back to calculation.`);
     throw new Error(`Routes API failed: No routes returned`);
   } catch (error) {
-    console.error('Error with Routes API:', error);
+    // console.error('Error with Routes API:', error);
     
     // Ensure we have valid coordinates before calculating fallback
     if (isNaN(origin.latitude) || isNaN(origin.longitude) || 
         isNaN(destination.latitude) || isNaN(destination.longitude)) {
-      console.warn('Invalid coordinates for fallback calculation, using default distance');
+      // console.warn('Invalid coordinates for fallback calculation, using default distance');
       return {
         distance: 1.5, // Default reasonable distance in miles
         duration: 180  // Default 3 minutes in seconds
@@ -109,7 +123,7 @@ export const calculateDistance = async (
     const estimatedDrivingDistance = straightLineDistance * 1.3; // Approximate driving distance
     const durationInSeconds = estimatedDrivingDistance * 120; // 2 minutes per mile
     
-    console.log(`Using calculated fallback: ${estimatedDrivingDistance.toFixed(2)} miles, ${durationInSeconds / 60} minutes`);
+    // console.log(`Using calculated fallback: ${estimatedDrivingDistance.toFixed(2)} miles, ${durationInSeconds / 60} minutes`);
     
     return {
       distance: estimatedDrivingDistance,
@@ -159,28 +173,41 @@ export const calculateStraightLineDistance = (
  */
 export const getUserLocation = (): Promise<Coordinates> => {
   return new Promise((resolve) => {
-    // For now, always return the default location
-    resolve(DEFAULT_USER_LOCATION);
-    
-    // Later, this can be updated to use browser geolocation:
-    /*
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
+          // console.log('User location obtained:', position.coords);
           resolve({
             latitude: position.coords.latitude,
             longitude: position.coords.longitude
           });
         },
-        () => {
-          resolve(DEFAULT_USER_LOCATION);
+        (error) => {
+          // console.warn('Error getting user location or permission denied. Falling back to default. Error:', error);
+          resolve(DEFAULT_USER_LOCATION); // Fallback to default if permission denied or error
         }
       );
     } else {
-      resolve(DEFAULT_USER_LOCATION);
+      // console.warn('Geolocation is not supported by this browser. Falling back to default.');
+      resolve(DEFAULT_USER_LOCATION); // Fallback to default if geolocation not supported
     }
-    */
   });
+};
+
+/**
+ * Check if a given location is within the defined service area.
+ *
+ * @param userLocation The user's current coordinates.
+ * @returns True if within service area, false otherwise.
+ */
+export const isWithinServiceArea = (userLocation: Coordinates): boolean => {
+  if (!userLocation || typeof userLocation.latitude !== 'number' || typeof userLocation.longitude !== 'number') {
+    // console.warn('isWithinServiceArea: Invalid userLocation provided.', userLocation);
+    return false; // Or handle as out of service area by default
+  }
+  const distance = calculateStraightLineDistance(SERVICE_AREA_CENTER, userLocation);
+  // console.log(`Distance from service center: ${distance.toFixed(2)} miles. Service radius: ${SERVICE_AREA_RADIUS_MILES} miles.`);
+  return distance <= SERVICE_AREA_RADIUS_MILES;
 };
 
 /**
@@ -191,37 +218,27 @@ export const getUserLocation = (): Promise<Coordinates> => {
  * @returns Promise with the food item and its distance from the user
  */
 export const calculateFoodItemDistance = async (
-  foodItem: FoodItem, 
-  userLocation?: Coordinates
-): Promise<FoodItem & { distanceFromUser?: number; estimatedDuration?: number }> => {
-  // If foodItem has no coordinates, return it as is without distance calculation
-  if (!foodItem.coordinates) {
-    console.log(`Skipping distance calculation for ${foodItem.name} - no coordinates available`);
-    return foodItem;
+  foodItem: SupabaseMenuItem,
+  userLocation: Coordinates
+): Promise<DisplayableFoodItem> => {
+  
+  let itemLat: number | undefined | null = foodItem.latitude; // Directly from SupabaseMenuItem
+  let itemLng: number | undefined | null = foodItem.longitude; // Directly from SupabaseMenuItem
+
+  if (itemLat === undefined || itemLng === undefined || itemLat === null || itemLng === null || isNaN(itemLat) || isNaN(itemLng)) {
+    // console.log(`Skipping distance calculation for ${foodItem.menu_item || foodItem.id} - no valid coordinates found on SupabaseMenuItem (lat: ${itemLat}, lng: ${itemLng}).`);
+    return foodItem as DisplayableFoodItem; 
   }
+
+  const itemCoordinates = { latitude: itemLat, longitude: itemLng };
+  const userCoords = userLocation;
   
-  // Check if food item has valid coordinates
-  if (!foodItem.coordinates.latitude || 
-      !foodItem.coordinates.longitude ||
-      isNaN(foodItem.coordinates.latitude) ||
-      isNaN(foodItem.coordinates.longitude)) {
-    console.log(`Item ${foodItem.name} has invalid coordinates:`, foodItem.coordinates);
-    
-    // Return item without distance info since coordinates are invalid
-    return foodItem;
-  }
-  
-  // Get user location if not provided
-  const userCoords = userLocation || await getUserLocation();
-  
-  // Calculate distance
   try {
-    // Log the coordinates being used
-    console.log(`Calculating distance from ${userCoords.latitude},${userCoords.longitude} to ${foodItem.coordinates.latitude},${foodItem.coordinates.longitude} for ${foodItem.name}`);
+    //console.log(`Calculating distance from ${userCoords.latitude},${userCoords.longitude} to ${itemCoordinates.latitude},${itemCoordinates.longitude} for ${foodItem.menu_item || foodItem.id}`);
     
     const { distance, duration } = await calculateDistance(
       userCoords, 
-      foodItem.coordinates
+      itemCoordinates
     );
     
     return {
@@ -230,99 +247,164 @@ export const calculateFoodItemDistance = async (
       estimatedDuration: duration
     };
   } catch (error) {
-    console.error(`Failed to calculate distance for ${foodItem.name}:`, error);
-    return foodItem;
+    // console.error(`Failed to calculate distance for ${foodItem.menu_item || foodItem.id}:`, error);
+    return foodItem as DisplayableFoodItem; // Return original item on error
   }
 };
 
 /**
  * Calculate distances for a batch of food items
- * This implementation supports progressive loading by returning items immediately
- * while continuing to calculate distances in the background
- * 
- * @param foodItems Array of food items
- * @returns Promise with food items including distance information
+ * @param foodItems Array of SupabaseMenuItem
+ * @param userLocation The user's current coordinates
+ * @returns Promise with DisplayableFoodItem array including distance information
  */
-export const calculateBatchDistances = async (
-  foodItems: FoodItem[]
-): Promise<(FoodItem & { distanceFromUser?: number; estimatedDuration?: number })[]> => {
-  // TEMPORARILY DISABLED REAL API CALLS
-  // Instead, assign random distances between 0.5 and 5 miles
-  
-  console.log('Using mock distance data to reduce API calls and lag');
-  
-  // Generate mock distance and duration for all items
-  return foodItems.map(item => {
-    // Generate random distance between 0.5 and 5 miles
-    const randomDistance = 0.5 + Math.random() * 4.5;
-    // Estimate duration (2 minutes per mile)
-    const randomDuration = randomDistance * 120;
-    
-    return {
-      ...item,
-      distanceFromUser: parseFloat(randomDistance.toFixed(2)),
-      estimatedDuration: parseInt(randomDuration.toFixed(0))
-    };
-  });
+export async function calculateBatchDistances(
+  items: SupabaseMenuItem[], 
+  userLocation: Coordinates
+): Promise<DisplayableFoodItem[]> {
+  const itemsWithCoords = items.filter(item => item.latitude && item.longitude);
+  const origin = `${userLocation.latitude},${userLocation.longitude}`;
+  const MAX_WAYPOINTS = 25; // Max waypoints per request (excluding origin and destination)
+  let processedIndex = 0;
+  const results: DisplayableFoodItem[] = [];
 
-  /* ORIGINAL CODE - TEMPORARILY COMMENTED OUT
-  const userLocation = await getUserLocation();
-  console.log(`Using user location: ${userLocation.latitude}, ${userLocation.longitude}`);
-  
-  // Create a copy of the food items that we'll update as distances are calculated
-  const results = [...foodItems];
-  
-  // Track items that need distance calculation
-  const itemsNeedingDistance = foodItems
-    .map((item, index) => ({ item, index }))
-    .filter(({ item }) => item.coordinates && 
-      item.coordinates.latitude && 
-      item.coordinates.longitude && 
-      !isNaN(item.coordinates.latitude) && 
-      !isNaN(item.coordinates.longitude));
-  
-  console.log(`Starting progressive distance calculation for ${itemsNeedingDistance.length} items with coordinates`);
-  
-  // Start calculating distances in the background but don't wait for completion
-  (async () => {
-    // Process items in batches to avoid overwhelming the API
-    const batchSize = 5; // Smaller batch size to avoid rate limits
+  while (processedIndex < itemsWithCoords.length) {
+    const batch = itemsWithCoords.slice(processedIndex, processedIndex + MAX_WAYPOINTS);
+    // console.log(`Processing batch ${Math.floor(processedIndex / MAX_WAYPOINTS) + 1} of ${Math.ceil(itemsWithCoords.length / MAX_WAYPOINTS)}`);
+
+    const waypoints = batch.map(item => `${item.latitude},${item.longitude}`);
     
-    for (let i = 0; i < itemsNeedingDistance.length; i += batchSize) {
-      const batch = itemsNeedingDistance.slice(i, i + batchSize);
-      console.log(`Processing batch ${Math.floor(i/batchSize) + 1} of ${Math.ceil(itemsNeedingDistance.length/batchSize)}`);
+    try {
+      const routesData = await fetchRouteMatrix(origin, waypoints);
       
-      // Process batch in parallel but with individual error handling
-      const batchPromises = batch.map(async ({ item, index }) => {
-        try {
-          const itemWithDistance = await calculateFoodItemDistance(item, userLocation);
-          
-          // Update the results array with the distance information
-          if (itemWithDistance.distanceFromUser !== undefined) {
-            results[index] = itemWithDistance;
-          }
-          
-          return itemWithDistance;
-        } catch (error) {
-          console.error(`Failed to process item ${item.name}:`, error);
-          return item;
+      batch.forEach((item, index) => {
+        const routeInfo = routesData[index]; // Assuming routesData is an array corresponding to waypoints
+        if (routeInfo && routeInfo.status.code === 0) { // OK status
+          results.push({
+            ...item,
+            distanceFromUser: routeInfo.distanceMeters,
+            estimatedDuration: routeInfo.duration,
+          });
+        } else {
+          // console.warn(`Could not fetch route for item ${item.id}: ${routeInfo?.status?.message || 'Unknown error'}`);
+          results.push({ ...item, distanceFromUser: undefined, estimatedDuration: undefined });
         }
       });
-      
-      await Promise.all(batchPromises);
-      
-      // Add a short delay between batches to avoid rate limiting
-      if (i + batchSize < itemsNeedingDistance.length) {
-        await new Promise(resolve => setTimeout(resolve, 500)); // 0.5 second delay
-      }
+    } catch (error) {
+      // console.error('Error fetching route matrix for batch:', error);
+      // For items in this failed batch, add them without distance/duration
+      batch.forEach(item => {
+        results.push({ ...item, distanceFromUser: undefined, estimatedDuration: undefined });
+      });
     }
-    
-    // Count how many items have distance info
-    const itemsWithDistance = results.filter(item => item.distanceFromUser !== undefined).length;
-    console.log(`Successfully calculated distances for ${itemsWithDistance} out of ${foodItems.length} items`);
-  })();
+    processedIndex += MAX_WAYPOINTS;
+  }
   
-  // Return results immediately - they will be updated in the background
+  // Add back items that had no coords, without distance info
+  items.forEach(item => {
+    if (!item.latitude || !item.longitude) {
+      results.push({ ...item, distanceFromUser: undefined, estimatedDuration: undefined });
+    }
+  });
+
   return results;
-  */
-}; 
+}
+
+async function fetchRouteDetails(origin: string, destination: string): Promise<RouteInfo | null> {
+  // console.log(`Calculating distance from ${origin} to ${destination} for ${destination}`);
+  const API_KEY = process.env.EXPO_PUBLIC_ROUTES_API_KEY;
+  if (!API_KEY) {
+    // console.error('ROUTES API key is not set.');
+    return null;
+  }
+
+  const url = `https://routes.googleapis.com/directions/v2:computeRoutes`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Goog-Api-Key': API_KEY,
+    'X-Goog-FieldMask': 'routes.duration,routes.distanceMeters,routes.legs.steps.localized_values'
+  };
+  const body = JSON.stringify({
+    origin: { location: { latLng: { latitude: parseFloat(origin.split(',')[0]), longitude: parseFloat(origin.split(',')[1]) } } },
+    destination: { location: { latLng: { latitude: parseFloat(destination.split(',')[0]), longitude: parseFloat(destination.split(',')[1]) } } },
+    travelMode: 'DRIVE',
+    routingPreference: 'TRAFFIC_AWARE',
+    computeAlternativeRoutes: false,
+    routeModifiers: {
+      avoidTolls: false,
+      avoidHighways: false,
+      avoidFerries: false,
+    },
+    languageCode: 'en-US',
+    units: 'IMPERIAL'
+  });
+
+  try {
+    // console.log(`Making Routes API request from ${origin} to ${destination}`);
+    const response = await fetch(url, { method: 'POST', headers, body });
+    const data = await response.json();
+
+    if (data.routes && data.routes.length > 0) {
+      const { distanceMeters, duration } = data.routes[0];
+      // console.log(`Routes API success: ${(distanceMeters * 0.000621371).toFixed(2)} miles, ${parseInt(duration)} seconds`);
+      return {
+        distanceMeters: distanceMeters,
+        duration: parseInt(duration.slice(0, -1)), // Remove 's' from duration and parse
+        status: { code: 0, message: 'OK'} // Assuming OK if we get data
+      };
+    } else {
+      // console.warn('Routes API did not return routes:', data);
+      return { distanceMeters: 0, duration: 0, status: {code: data.error?.code || -1, message: data.error?.message || 'No routes found'}};
+    }
+  } catch (error) {
+    // console.error('Routes API request failed:', error);
+    return { distanceMeters: 0, duration: 0, status: {code: -1, message: (error as Error).message || 'Request failed'}};
+  }
+}
+
+// New function for Batch Route Matrix
+async function fetchRouteMatrix(originCoords: string, waypointCoords: string[]): Promise<RouteInfo[]> {
+  const API_KEY = process.env.EXPO_PUBLIC_ROUTES_API_KEY;
+  if (!API_KEY) {
+    // console.error('ROUTES API key is not set for Matrix API.');
+    return waypointCoords.map(() => ({ distanceMeters: 0, duration: 0, status: { code: -1, message: 'API Key not set' } }));
+  }
+
+  const url = 'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix';
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Goog-Api-Key': API_KEY,
+    'X-Goog-FieldMask': 'originIndex,destinationIndex,duration,distanceMeters,status'
+  };
+
+  const origins = [{ waypoint: { location: { latLng: { latitude: parseFloat(originCoords.split(',')[0]), longitude: parseFloat(originCoords.split(',')[1]) } } } }];
+  const destinations = waypointCoords.map(coords => ({ waypoint: { location: { latLng: { latitude: parseFloat(coords.split(',')[0]), longitude: parseFloat(coords.split(',')[1]) } } } }));
+
+  const body = JSON.stringify({
+    origins: origins,
+    destinations: destinations,
+    travelMode: 'DRIVE',
+    routingPreference: 'TRAFFIC_AWARE' 
+  });
+
+  try {
+    // console.log(`Batch request to Routes API with ${waypointCoords.length} waypoints.`);
+    const response = await fetch(url, { method: 'POST', headers, body });
+    const responseData = await response.json();
+
+    if (Array.isArray(responseData)) {
+      // console.log('Routes API Matrix success:', responseData.length, 'routes processed.');
+      return responseData.map(item => ({
+        distanceMeters: item.distanceMeters || 0,
+        duration: item.duration ? parseInt(item.duration.slice(0, -1)) : 0,
+        status: item.status || { code: -1, message: 'Unknown error in matrix response' }
+      }));
+    } else {
+      // console.warn('Routes API Matrix did not return array:', responseData);
+      return waypointCoords.map(() => ({ distanceMeters: 0, duration: 0, status: { code: -1, message: 'Invalid matrix response format' } }));
+    }
+  } catch (error) {
+    // console.error('Routes API Matrix request failed:', error);
+    return waypointCoords.map(() => ({ distanceMeters: 0, duration: 0, status: { code: -1, message: (error as Error).message || 'Matrix request failed' } }));
+  }
+} 

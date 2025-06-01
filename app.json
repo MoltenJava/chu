@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Chewzee!",
-    "slug": "Chewzee!",
+    "slug": "chu",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -26,6 +26,14 @@
           "locationWhenInUsePermission": "We need your location to show you delicious food options nearby.",
           "isIosBackgroundLocationEnabled": true
         }
+      ],
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/",
+          "project": "react-native",
+          "organization": "chewzee"
+        }
       ]
     ],
     "ios": {
@@ -40,7 +48,10 @@
         "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location to show you delicious food options nearby and notify you about new items in your area.",
         "NSLocationAlwaysUsageDescription": "We need your location to show you delicious food options nearby and notify you about new items in your area.",
         "NSLocationUsageDescription": "We need your location to show you delicious food options nearby.",
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": [
+          "location",
+          "fetch"
+        ]
       }
     },
     "android": {
@@ -49,7 +60,11 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.jaz.chewzee",
-      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION", "ACCESS_BACKGROUND_LOCATION"]
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION"
+      ]
     },
     "web": {
       "bundler": "metro",

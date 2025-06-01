@@ -11,14 +11,22 @@ import {
   Linking,
   SectionList,
   Alert,
-  Animated,
   Easing,
-  Dimensions
+  Dimensions,
+  Pressable,
+  ActivityIndicator
 } from 'react-native';
 import { Ionicons, FontAwesome5, MaterialIcons, FontAwesome } from '@expo/vector-icons';
 import { SupabaseMenuItem } from '@/types/supabase';
 import { CoupleSession } from '@/types/couple';
 import RandomFoodSelector from './RandomFoodSelector';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  interpolate,
+  Extrapolate,
+} from 'react-native-reanimated';
 
 interface SavedItemsModalProps {
   visible: boolean;
@@ -28,7 +36,9 @@ interface SavedItemsModalProps {
   activeRestaurant: string | null;
   coupleSession?: CoupleSession | null;
   sessionMatchIds?: Set<string>;
-  onOpenSettings: () => void;
+  onLogoutRequest: () => void;
+  onClearAll: () => void;
+  isLoading: boolean;
 }
 
 interface RestaurantSection {
@@ -44,10 +54,32 @@ const SavedItemsModal: React.FC<SavedItemsModalProps> = ({
   activeRestaurant,
   coupleSession,
   sessionMatchIds = new Set(),
-  onOpenSettings,
+  onLogoutRequest,
+  onClearAll,
+  isLoading,
 }) => {
-  // Add state for random food selector modal
   const [randomSelectorVisible, setRandomSelectorVisible] = useState(false);
+  const [isSettingsDropdownVisible, setIsSettingsDropdownVisible] = useState(false);
+
+  const dropdownAnim = useSharedValue(0);
+
+  useEffect(() => {
+    dropdownAnim.value = withSpring(isSettingsDropdownVisible ? 1 : 0, {
+      damping: 12,
+      stiffness: 100,
+    });
+  }, [isSettingsDropdownVisible]);
+
+  const dropdownAnimatedStyle = useAnimatedStyle(() => {
+    const scale = interpolate(dropdownAnim.value, [0, 1], [0.8, 1], Extrapolate.CLAMP);
+    const translateY = interpolate(dropdownAnim.value, [0, 1], [-20, 0], Extrapolate.CLAMP);
+    const opacity = dropdownAnim.value;
+
+    return {
+      opacity,
+      transform: [{ scale }, { translateY }],
+    };
+  });
 
   const handleDeliveryPress = (foodName: string, serviceName: string, url?: string) => {
     if (url) {
@@ -73,17 +105,25 @@ const SavedItemsModal: React.FC<SavedItemsModalProps> = ({
   };
 
   const handleSettingsPress = () => {
-    console.log('Settings button pressed - requesting open');
-    onOpenSettings();
+    setIsSettingsDropdownVisible(prev => !prev);
   };
 
-  // Add handler for dice button
+  const handleLogoutPress = () => {
+    setIsSettingsDropdownVisible(false);
+    onLogoutRequest();
+  };
+
   const handleRandomButtonPress = () => {
     if (savedItems.length === 0) {
       Alert.alert("No Saved Dishes", "Save some dishes first to use the random picker!");
       return;
     }
     setRandomSelectorVisible(true);
+  };
+
+  const handleClearAllPress = () => {
+    setIsSettingsDropdownVisible(false);
+    onClearAll();
   };
 
   const sections = useMemo(() => {
@@ -203,6 +243,42 @@ const SavedItemsModal: React.FC<SavedItemsModalProps> = ({
     );
   };
 
+  const renderModalContent = () => {
+    if (isLoading) {
+      return (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colorAccent} />
+        </View>
+      );
+    }
+
+    if (sections.length === 0) {
+      return (
+        <View style={styles.emptyListContainer}>
+          <Ionicons name="restaurant-outline" size={70} color="#ccc" />
+          <Text style={styles.emptyListText}>No saved dishes yet!</Text>
+          <Text style={styles.emptyListSubtext}>
+            Swipe right on dishes you like to save them here
+          </Text>
+        </View>
+      );
+    }
+
+    return (
+      <SectionList
+        sections={sections}
+        renderSectionHeader={renderSectionHeader}
+        renderItem={renderItem}
+        keyExtractor={(item, index) => (item._id || item.id) + index}
+        stickySectionHeadersEnabled={true}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.listContent}
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
+        style={{ flex: 1 }}
+      />
+    );
+  };
+
   return (
     <Modal
       animationType="slide"
@@ -211,54 +287,63 @@ const SavedItemsModal: React.FC<SavedItemsModalProps> = ({
       onRequestClose={onClose}
     >
       <SafeAreaView style={styles.modalContainer}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>
-              {coupleSession?.id ? 'Saved & Matches' : 'Your Saved Dishes'}
-            </Text>
-            <View style={styles.headerButtonsContainer}>
-              {/* Dice button for random food selector */}
-              <TouchableOpacity onPress={handleRandomButtonPress} style={styles.headerButton}>
-                <Ionicons name="dice" size={24} color="#FF6F61" />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleSettingsPress} style={styles.headerButton}>
-                <Ionicons name="settings-outline" size={26} color="#555" />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={onClose} style={styles.headerButton}>
-                <Ionicons name="close" size={30} color="#555" />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {sections.length === 0 ? (
-            <View style={styles.emptyListContainer}>
-              <Ionicons name="restaurant-outline" size={70} color="#ccc" />
-              <Text style={styles.emptyListText}>No saved dishes yet!</Text>
-              <Text style={styles.emptyListSubtext}>
-                Swipe right on dishes you like to save them here
+        <Pressable 
+          style={{flex: 1}} 
+          onPress={() => setIsSettingsDropdownVisible(false)}
+          disabled={!isSettingsDropdownVisible}
+        >
+          <View style={styles.modalContent} >
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {coupleSession?.id ? 'Saved & Matches' : 'Your Saved Dishes'}
               </Text>
+              <View style={styles.headerButtonsContainer}>
+                <TouchableOpacity onPress={handleRandomButtonPress} style={styles.modalHeaderButtonContainer}>
+                  <View style={styles.modalHeaderButtonInner}>
+                    <Ionicons name="dice" size={22} color={colorAccent} /> 
+                  </View>
+                </TouchableOpacity>
+                
+                <TouchableOpacity onPress={handleSettingsPress} style={styles.modalHeaderButtonContainer}>
+                  <View style={styles.modalHeaderButtonInner}>
+                    <Ionicons name="settings-outline" size={24} color={colorTextSecondary} />
+                  </View>
+                </TouchableOpacity>
+                
+                <TouchableOpacity onPress={onClose} style={styles.modalHeaderButtonContainer}>
+                  <View style={styles.modalHeaderButtonInner}>
+                    <Ionicons name="close" size={28} color={colorTextSecondary} />
+                  </View>
+                </TouchableOpacity>
+              </View>
+              
+              {isSettingsDropdownVisible && (
+                <Animated.View style={[styles.settingsDropdown, dropdownAnimatedStyle]}>
+                  <TouchableOpacity onPress={handleClearAllPress} style={styles.dropdownItem}>
+                    <Ionicons name="trash-bin-outline" size={20} color={colorAccent} style={styles.dropdownIcon} />
+                    <Text style={[styles.dropdownText, styles.dropdownTextDestructive]}>Clear All Items</Text>
+                  </TouchableOpacity>
+                  
+                  <View style={styles.dropdownSeparator} />
+                  
+                  <TouchableOpacity onPress={handleLogoutPress} style={styles.dropdownItem}>
+                    <Ionicons name="log-out-outline" size={20} color={colorTextSecondary} style={styles.dropdownIcon} />
+                    <Text style={styles.dropdownText}>Logout</Text>
+                  </TouchableOpacity>
+                </Animated.View>
+              )}
             </View>
-          ) : (
-            <SectionList
-              sections={sections}
-              renderSectionHeader={renderSectionHeader}
-              renderItem={renderItem}
-              keyExtractor={(item, index) => (item._id || item.id) + index}
-              stickySectionHeadersEnabled={true}
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.listContent}
-              ItemSeparatorComponent={() => <View style={styles.separator} />}
-            />
-          )}
 
-          {/* Random Food Selector Modal */}
-          <RandomFoodSelector 
-            visible={randomSelectorVisible}
-            onClose={() => setRandomSelectorVisible(false)}
-            items={savedItems}
-            onSelectDelivery={handleDeliveryPress}
-          />
-        </View>
+            {renderModalContent()}
+
+            <RandomFoodSelector 
+              visible={randomSelectorVisible}
+              onClose={() => setRandomSelectorVisible(false)}
+              items={savedItems}
+              onSelectDelivery={handleDeliveryPress}
+            />
+          </View>
+        </Pressable>
       </SafeAreaView>
     </Modal>
   );
@@ -270,6 +355,7 @@ const colorBlack = '#000000';
 const colorBorder = '#E0E0E0';
 const colorLightGray = '#f0f0f0';
 const colorTextSecondary = '#666';
+const colorShadow = '#BDBDBD';
 
 const styles = StyleSheet.create({
   modalContainer: {
@@ -286,8 +372,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: colorLightGray,
     backgroundColor: '#fff',
+    position: 'relative',
+    zIndex: 10,
   },
   modalTitle: {
     fontSize: 18,
@@ -300,9 +388,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  headerButton: {
-    padding: 8,
-    marginLeft: 10,
+  modalHeaderButtonContainer: {
+    width: 40, 
+    height: 40, 
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  modalHeaderButtonInner: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colorWhite,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colorBorder,
+    shadowColor: colorShadow,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
   },
   listContent: {
     paddingBottom: 20,
@@ -463,6 +569,50 @@ const styles = StyleSheet.create({
   waiterButtonInnerActive: {
     backgroundColor: colorBlack,
     borderColor: colorBlack,
+  },
+  settingsDropdown: {
+    position: 'absolute',
+    top: 55,
+    right: 15,
+    backgroundColor: colorWhite,
+    borderRadius: 8,
+    paddingVertical: 5,
+    shadowColor: colorShadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 5,
+    elevation: 6,
+    zIndex: 1000,
+    minWidth: 150,
+    borderWidth: 1,
+    borderColor: colorBorder,
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+  },
+  dropdownIcon: {
+    marginRight: 10,
+  },
+  dropdownText: {
+    fontSize: 16,
+    color: colorTextSecondary, 
+  },
+  dropdownTextDestructive: {
+    color: colorAccent, 
+  },
+  dropdownSeparator: {
+    height: 1,
+    backgroundColor: colorBorder,
+    marginVertical: 5,
+    marginHorizontal: 10,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });
 

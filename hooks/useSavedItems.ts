@@ -1,16 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { UserSavedItem } from '@/types/database';
+import { UserSavedItem, Restaurant, MenuItem } from '@/types/database';
 import { SupabaseMenuItem, convertToSupabaseMenuItem } from '@/types/supabase';
+import * as Sentry from '@sentry/react-native';
+import { useCoupleContext } from '@/context/CoupleContext';
 
 export interface SavedItemWithDetails extends UserSavedItem {
-  menuItem: SupabaseMenuItem;
+  menu_items: MenuItem & { restaurant?: Restaurant };
 }
 
 export function useSavedItems() {
   const [savedItems, setSavedItems] = useState<SavedItemWithDetails[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const { user } = useCoupleContext();
 
   const fetchSavedItems = async () => {
     try {
@@ -22,75 +25,101 @@ export function useSavedItems() {
 
       const { data: savedItemsData, error: supabaseError } = await supabase
         .from('user_saved_items')
-        .select('*')
-        .order('saved_at', { ascending: false });
+        .select(`
+          user_id,
+          menu_item_id,
+          created_at, 
+          notes,
+          order_count,
+          last_ordered_at,
+          menu_items ( 
+            *,
+            restaurants (*)
+          )
+        `)
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
 
       if (supabaseError) throw supabaseError;
 
-      // Get menu items from Supabase
-      const menuItemIds = savedItemsData.map(item => item.menu_item_id);
+      console.log(`[useSavedItems] Fetched ${savedItemsData?.length || 0} raw saved items.`);
       
-      // Fetch menu items
-      const { data: menuItems, error: menuItemsError } = await supabase
-        .from('menu_items')
-        .select('*')
-        .in('id', menuItemIds);
+      const processedData = savedItemsData
+        ?.map(item => {
+          const menuItemData = item.menu_items as unknown as (MenuItem & { restaurants?: Restaurant });
         
-      if (menuItemsError) throw menuItemsError;
-      
-      // Fetch restaurants for these menu items
-      const restaurantIds = menuItems?.map(item => item.restaurant_id) || [];
-      const { data: restaurants, error: restaurantsError } = await supabase
-        .from('restaurants')
-        .select('*')
-        .in('id', restaurantIds);
-        
-      if (restaurantsError) throw restaurantsError;
-      
-      // Create a map of restaurant IDs to restaurant objects
-      const restaurantMap = new Map();
-      restaurants?.forEach(restaurant => {
-        restaurantMap.set(restaurant.id, restaurant);
-      });
-
-      // Combine Supabase data
-      const combinedData = savedItemsData.map(savedItem => {
-        const menuItem = menuItems?.find(item => item.id === savedItem.menu_item_id);
-        const restaurant = menuItem ? restaurantMap.get(menuItem.restaurant_id) : undefined;
+          if (!menuItemData || typeof menuItemData !== 'object' || Array.isArray(menuItemData)) {
+              console.warn('Saved item found without valid menu item details:', item);
+              return null;
+          }
         
         return {
-          ...savedItem,
-          menuItem: menuItem ? convertToSupabaseMenuItem(menuItem, restaurant) : null,
-        };
-      }).filter(item => item.menuItem !== null) as SavedItemWithDetails[];
+              user_id: item.user_id,
+              menu_item_id: item.menu_item_id,
+              created_at: item.created_at,
+              notes: item.notes,
+              order_count: item.order_count,
+              last_ordered_at: item.last_ordered_at,
+              menu_items: menuItemData
+          } as SavedItemWithDetails; 
+        })
+        .filter((item): item is SavedItemWithDetails => item !== null);
 
-      setSavedItems(combinedData);
-    } catch (err) {
-      console.error('Error fetching saved items:', err);
-      setError(err instanceof Error ? err.message : 'Failed to fetch saved items');
+      setSavedItems(processedData || []);
+      Sentry.addBreadcrumb({
+        category: 'data.fetch',
+        message: 'Saved items fetched successfully',
+        level: 'info',
+        data: { count: processedData?.length || 0 }
+      });
+
+    } catch (err: any) {
+      console.error('[useSavedItems] Error fetching saved items:', err);
+      Sentry.captureException(err, { extra: { message: 'Error in fetchSavedItems' } });
+      setError(err.message || 'Failed to fetch saved items');
     } finally {
       setLoading(false);
     }
   };
 
   const addSavedItem = async (menuItemId: string) => {
+    console.log(`[useSavedItems] Attempting to add item: ${menuItemId}`);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      console.log(`[useSavedItems] Got user: ${user?.id}, Error: ${userError}`);
+
+      if (userError) throw userError;
       if (!user) throw new Error('User not authenticated');
 
+      console.log(`[useSavedItems] Calling supabase.insert for user ${user.id}, item ${menuItemId}`);
       const { error: insertError } = await supabase
         .from('user_saved_items')
         .insert({
           user_id: user.id,
           menu_item_id: menuItemId,
         });
+      console.log(`[useSavedItems] Supabase insert finished. Error: ${insertError}`);
 
-      if (insertError) throw insertError;
+      if (insertError) {
+          if (insertError.code === '23505') {
+            console.warn('[useSavedItems] Item already saved.');
+          } else {
+            throw insertError;
+          }
+      }
 
-      // Refresh the saved items list
-      await fetchSavedItems();
+      // Optimistic update locally (add a placeholder or refetch partially)
+      // For simplicity, just logging success breadcrumb for now
+      Sentry.addBreadcrumb({
+        category: 'data.mutate',
+        message: 'Saved item added successfully (local state update pending refresh)',
+        level: 'info',
+        data: { userId: user.id, foodItemId: menuItemId }
+      });
+
     } catch (err) {
-      console.error('Error adding saved item:', err);
+      console.error('[useSavedItems] Error in addSavedItem catch block:', err);
+      Sentry.captureException(err, { extra: { message: 'Error in addSavedItem' } });
       throw err;
     }
   };
@@ -108,15 +137,25 @@ export function useSavedItems() {
 
       if (deleteError) throw deleteError;
 
-      // Update local state
       setSavedItems(prev => prev.filter(item => item.menu_item_id !== menuItemId));
+
+      // Optimistic update locally (remove from state)
+      // For simplicity, just logging success breadcrumb for now
+      Sentry.addBreadcrumb({
+        category: 'data.mutate',
+        message: 'Saved item removed successfully (local state update pending refresh)',
+        level: 'info',
+        data: { userId: user.id, foodItemId: menuItemId }
+      });
+
     } catch (err) {
       console.error('Error removing saved item:', err);
+      Sentry.captureException(err, { extra: { message: 'Error in removeSavedItem' } });
       throw err;
     }
   };
 
-  const updateSavedItem = async (menuItemId: string, updates: Partial<UserSavedItem>) => {
+  const updateSavedItem = async (menuItemId: string, updates: Partial<Omit<UserSavedItem, 'user_id' | 'menu_item_id' | 'created_at'>>) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
@@ -129,13 +168,55 @@ export function useSavedItems() {
 
       if (updateError) throw updateError;
 
-      // Refresh the saved items list
       await fetchSavedItems();
     } catch (err) {
       console.error('Error updating saved item:', err);
       throw err;
     }
   };
+
+  const clearAllSavedItems = useCallback(async () => {
+    if (!user?.id) {
+      console.error('[useSavedItems] User not logged in for clear all');
+      Sentry.captureMessage('Attempted to clear saved items without user', 'warning');
+      throw new Error("User not logged in.");
+    }
+
+    setLoading(true);
+    setError(null);
+
+    Sentry.addBreadcrumb({
+      category: 'data.mutate',
+      message: 'Clearing all saved items',
+      level: 'info',
+      data: { userId: user.id },
+    });
+
+    try {
+      const { error: deleteError } = await supabase
+        .from('user_saved_items')
+        .delete()
+        .eq('user_id', user.id);
+
+      if (deleteError) throw deleteError;
+
+      setSavedItems([]); // Clear local state
+      Sentry.addBreadcrumb({
+        category: 'data.mutate',
+        message: 'All saved items cleared successfully',
+        level: 'info',
+        data: { userId: user.id },
+      });
+
+    } catch (error: any) {
+      console.error('[useSavedItems] Error clearing all saved items:', error);
+      Sentry.captureException(error, { extra: { message: 'Error in clearAllSavedItems' } });
+      setError(error.message || 'Failed to clear items');
+      throw error; // Rethrow
+    } finally {
+      setLoading(false);
+    }
+  }, [user?.id]);
 
   // Fetch saved items on mount
   useEffect(() => {
@@ -150,5 +231,6 @@ export function useSavedItems() {
     removeSavedItem,
     updateSavedItem,
     refreshSavedItems: fetchSavedItems,
+    clearAllSavedItems,
   };
 } 

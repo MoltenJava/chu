@@ -1,7 +1,7 @@
 import { FoodItem } from '../types/food';
 import { fetchRestaurantMetadata, loadLocalMetadata, getBackupMetadata } from '../utils/metadataService';
 import { foodData } from './foodData'; // Import the mock data as fallback
-import { calculateBatchDistances } from '../utils/locationService';
+import { calculateBatchDistances, Coordinates } from '../utils/locationService';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
@@ -50,9 +50,9 @@ const shuffleArray = <T>(array: T[]): T[] => {
 /**
  * Load food data from the actual API or local cache
  */
-export const loadRealFoodData = async (): Promise<FoodItem[]> => {
+export const loadRealFoodData = async (userLocation: Coordinates): Promise<FoodItem[]> => {
   try {
-    console.log('[REAL-FOOD] Starting to load real food data');
+    console.log('[REAL-FOOD] Starting to load real food data, user location:', userLocation);
     const isTestFlightBuild = isTestFlight();
     console.log('[REAL-FOOD] Environment:', isTestFlightBuild ? 'TestFlight' : 'Development');
     
@@ -127,7 +127,17 @@ export const loadRealFoodData = async (): Promise<FoodItem[]> => {
     const limitedItems = foodItems.slice(0, MAX_FOOD_ITEMS);
     
     // Calculate distances for the limited items
-    const itemsWithDistance = await calculateBatchDistances(limitedItems);
+    if (!userLocation) {
+      console.error('[REAL-FOOD] User location is missing, cannot calculate distances.');
+      // Decide on fallback behavior: return items without distance, or throw error, or use a default location?
+      // For now, returning items as is, which means they might use mock/default distances if calculateBatchDistances has fallbacks
+      // Or, if calculateBatchDistances strictly requires it, this will fail.
+      // The previous step made userLocation required for calculateBatchDistances.
+      // So, we must have a valid userLocation here.
+      // Throwing an error or using a VERY clear default/error state for items is better.
+      throw new Error("[REAL-FOOD] Critical: User location not available for distance calculation.");
+    }
+    const itemsWithDistance = await calculateBatchDistances(limitedItems, userLocation);
     
     console.log(`Returning ${itemsWithDistance.length} items with progressive distance calculation (limited from ${foodItems.length})`);
     return itemsWithDistance;
@@ -185,13 +195,16 @@ export const getRestaurantItems = async (restaurant: string): Promise<FoodItem[]
 /**
  * Load food data from a local file for testing
  */
-export const loadLocalFoodData = async (localPath: string): Promise<FoodItem[]> => {
+export const loadLocalFoodData = async (localPath: string, userLocation: Coordinates): Promise<FoodItem[]> => {
   try {
     // Get the base food items from the local file
     let foodItems = await loadLocalMetadata(localPath);
     
+    if (!userLocation) {
+      throw new Error("[REAL-FOOD-LOCAL] Critical: User location not available for distance calculation.");
+    }
     // Calculate distances for the food items
-    foodItems = await calculateBatchDistances(foodItems);
+    foodItems = await calculateBatchDistances(foodItems, userLocation);
     
     // Sort by distance (closest first)
     foodItems.sort((a, b) => {

@@ -17,8 +17,11 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
+import { useLocationContext } from '../../context/LocationContext'; // Import useLocationContext
 
 export default function RatePhotosScreen() {
+  const { currentUserLocationForApp, simulatedLocationActive } = useLocationContext(); // Get location from context
+
   const [foodData, setFoodData] = useState<FoodItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -33,10 +36,17 @@ export default function RatePhotosScreen() {
   
   // Function to load food data
   const loadData = useCallback(async () => {
+    if (!currentUserLocationForApp) {
+      console.warn('[RatePhotosScreen] No user location available yet. Skipping data load.');
+      // Optionally set an error state or specific loading message
+      setIsLoading(false); // Ensure loading indicator stops if we skip
+      return;
+    }
     setIsLoading(true);
     try {
       // Load all food data with distance information
-      const allFood = await loadRealFoodData();
+      console.log('[RatePhotosScreen] Loading real food data with location:', currentUserLocationForApp);
+      const allFood = await loadRealFoodData(currentUserLocationForApp); // Pass location
       
       if (allFood && allFood.length > 0) {
         console.log(`Loaded ${allFood.length} items with distance info for rating`);
@@ -81,7 +91,7 @@ export default function RatePhotosScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [currentUserLocationForApp]); // Add currentUserLocationForApp to dependencies
   
   // Update rating statistics
   const updateRatingStats = useCallback(async () => {
@@ -108,8 +118,10 @@ export default function RatePhotosScreen() {
   
   // Load data on mount
   useEffect(() => {
+    if (currentUserLocationForApp) { // Only load if location is available
     loadData();
-  }, [loadData]);
+    }
+  }, [loadData, currentUserLocationForApp]); // Add currentUserLocationForApp to dependencies
   
   // Add the undo functionality
   const handleUndo = useCallback(async () => {

@@ -1,3 +1,5 @@
+import { SupabaseMenuItem } from './supabase'; // Assuming supabase.ts is in the same directory
+
 export interface FoodItem {
   id: string;
   name: string;
@@ -23,6 +25,11 @@ export interface FoodItem {
   estimatedDuration?: number;
 }
 
+export interface DisplayableFoodItem extends SupabaseMenuItem {
+  distanceFromUser?: number;
+  estimatedDuration?: number;
+}
+
 export type FoodType = 
   | 'all'
   | 'spicy' 
@@ -38,7 +45,7 @@ export type FoodType =
 
 export type PhotoRating = 'good' | 'bad' | 'meh' | null;
 
-export type SwipeDirection = 'left' | 'right' | 'up' | 'down' | 'none';
+export type SwipeDirection = 'left' | 'right' | 'none';
 
 export interface SwipeHistoryItem {
   foodItem: FoodItem;
